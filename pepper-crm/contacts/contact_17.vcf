@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:75ecd7e8-04a2-4d96-a423-9228c76c9221
+FN:Harper Harris
+EMAIL;TYPE=INTERNET:hudson@example.net
+TEL;TYPE=CELL:1-841-553-1493 x11569
+ORG:Langosh and Dare Inc
+NOTE:Important contact - needs follow-up.
+ TODO: schedule catch-up call
+ --- CRM Log ---
+ 2026-04-30: Last connected at conference. Set reminder to reconnect.
+ Reconnect: 2 weeks
+END:VCARD

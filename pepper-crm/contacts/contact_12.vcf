@@ -1,0 +1,12 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:08c7f11f-b8ec-4cec-840a-5721dcbb7a7f
+FN:Lucas Martinez
+EMAIL;TYPE=INTERNET:darrell@example.net
+TEL;TYPE=CELL:690.924.9262 x648
+ORG:Muller and Murphy Inc
+ADR;TYPE=HOME:;;;Bechtelar mouth;CA;94102;USA
+NOTE:Met at Consensus Miami. Works on ZK proofs at Aztec.
+ TODO: follow up on proposal
+ Reconnect: 6 weeks
+END:VCARD

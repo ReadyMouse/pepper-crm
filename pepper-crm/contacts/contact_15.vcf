@@ -1,0 +1,16 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:320a85a4-55ee-4b1e-b021-7e9eb327dff1
+FN:Mia Jackson
+EMAIL;TYPE=INTERNET:dejuan@example.com
+TEL;TYPE=CELL:1-896-046-7932
+ORG:Bode and Feest and Sons
+ADR;TYPE=HOME:;;;Wehner shire;MA;02101;USA
+NOTE:Long-term collaborator on grant proposals.
+ TODO: review latest draft
+ Reconnect: 2 months
+ --- CRM Log ---
+ 2026-04-15: Sent intro to research team. Reset to 3 months.
+ 2026-03-10: Initial meeting at ETHDenver.
+ Reconnect: 4 months
+END:VCARD

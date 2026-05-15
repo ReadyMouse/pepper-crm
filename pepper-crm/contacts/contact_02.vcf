@@ -1,0 +1,10 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:c49457e5-df34-45d5-b599-2da22352cc17
+FN:James Martinez
+EMAIL;TYPE=INTERNET:kendall@example.com
+TEL;TYPE=CELL:1-692-950-9754 x436
+ORG:Stiedemann and Zboncak LLC
+ADR;TYPE=HOME:;;123 Main St;Brenden chester;VT;224;Virgin Islands, British
+NOTE:Met at a networking event. Works in distributed systems.
+END:VCARD

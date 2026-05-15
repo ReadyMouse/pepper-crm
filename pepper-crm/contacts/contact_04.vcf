@@ -1,0 +1,12 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:9a34dac2-6606-473d-8964-aadb0559d226
+FN:Liam Anderson
+EMAIL;TYPE=INTERNET:elenora@example.net
+TEL;TYPE=CELL:887-057-6038 x66175
+ORG:Marvin and Wisozk Group
+ADR;TYPE=HOME:;;;Lake Serenity Beatty mouth;CA;94000;Madagascar
+NOTE:Active collaborator on crypto research.
+ TODO: send intro to team
+ TODO: share grant proposal template
+END:VCARD

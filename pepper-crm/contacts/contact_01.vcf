@@ -1,0 +1,10 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:20c1272b-7f98-41a5-ba1f-8e5c727c0341
+FN:Emma Wilson
+EMAIL;TYPE=INTERNET:ricky@example.org
+TEL;TYPE=CELL:920-832-9504 x7846
+ORG:Schumm and Sons
+ADR;TYPE=HOME:;;123 Main St;Deckow side;PA;3931;Saudi Arabia
+NOTE:Met at a networking event. Works in distributed systems.
+END:VCARD

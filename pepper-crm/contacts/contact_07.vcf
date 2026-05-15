@@ -1,0 +1,11 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:2d0c0208-519b-49ae-99a2-0c9e0e1b07ff
+FN:Ava Johnson
+EMAIL;TYPE=INTERNET:mike@example.org
+TEL;TYPE=CELL:1-354-769-9561 x02269
+ORG:Douglas Group
+ADR;TYPE=HOME:;;;Neoma bury;NY;10001;USA
+NOTE:Met at conference. Interested in zero-knowledge proofs.
+ Reconnect: 3 days
+END:VCARD

@@ -1,0 +1,11 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:5a4c5994-079c-4799-82e8-ba61c0d91475
+FN:Olivia Brown
+EMAIL;TYPE=INTERNET:leola@example.net
+TEL;TYPE=CELL:738.037.3608
+ORG:Gibson and Nitzsche Group
+ADR;TYPE=HOME:;;;Cassin fort;CA;94000;Nicaragua
+NOTE:Active collaborator on crypto research.
+ TODO: follow up on collaboration
+END:VCARD

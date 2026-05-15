@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:292ee24c-3cbb-4d05-96a2-0195f3513b11
+FN:Charlotte Rodriguez
+EMAIL;TYPE=INTERNET:katrine@example.org
+TEL;TYPE=CELL:1-499-187-8113
+ORG:Marks and Shields LLC
+ADR;TYPE=HOME:;;;Rowe view;CA;94102;USA
+NOTE:Met at Consensus Miami. Works on ZK proofs at Aztec.
+ TODO: share research paper
+ TODO: schedule demo
+ Reconnect: 2 months
+END:VCARD

@@ -1,0 +1,15 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:ab6eb7a9-1bf3-4966-89fe-6c384b549b76
+FN:Elijah White
+EMAIL;TYPE=INTERNET:ezekiel@example.com
+TEL;TYPE=CELL:1-587-513-1560 x85445
+ORG:Ziemann and Parisian and Sons
+ADR;TYPE=HOME:;;;Hegmann mouth;MA;02101;USA
+NOTE:Long-term collaborator on grant proposals.
+ TODO: review latest draft
+ Reconnect: 2 months
+ --- CRM Log ---
+ 2026-05-01: Follow-up call about grant application.
+ Reconnect: 4 months
+END:VCARD

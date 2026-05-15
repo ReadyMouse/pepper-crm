@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:1346aea0-93b1-4580-a3f3-42e3bc086cf8
+FN:Mason Garcia
+EMAIL;TYPE=INTERNET:reginald@example.org
+TEL;TYPE=CELL:548.862.7537 x82752
+ORG:Little Group
+ADR;TYPE=HOME:;;;West Filomena Tillman land;CA;94102;USA
+NOTE:Met at Consensus Miami. Works on ZK proofs at Aztec.
+ TODO: intro to ZK team
+ TODO: send ZCG grant template
+ Reconnect: 3 months
+END:VCARD

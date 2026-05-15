@@ -1,0 +1,11 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:95c2076f-6403-46ff-a983-1dab85f82a29
+FN:Ethan Davis
+EMAIL;TYPE=INTERNET:melisa@example.net
+TEL;TYPE=CELL:650-877-9744
+ORG:Lockman and Wisozk Inc
+ADR;TYPE=HOME:;;;New Curtis Willms ville;NY;10001;USA
+NOTE:Met at conference. Interested in zero-knowledge proofs.
+ Reconnect: 5 days
+END:VCARD

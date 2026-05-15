@@ -1,0 +1,11 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:97d18905-4d25-47df-8d8b-3de91874a843
+FN:Isabella Moore
+EMAIL;TYPE=INTERNET:beaulah@example.com
+TEL;TYPE=CELL:(331) 343-7386 x0720
+ORG:Jerde and Kemmer LLC
+ADR;TYPE=HOME:;;;Murray haven;NY;10001;USA
+NOTE:Met at conference. Interested in zero-knowledge proofs.
+ Reconnect: 1 week
+END:VCARD

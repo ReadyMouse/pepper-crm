@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:0bcd1fae-360e-41ad-9fbd-8b0053c33654
+FN:Alexander Martin
+EMAIL;TYPE=INTERNET:jamison@example.net
+TEL;TYPE=CELL:(458) 159-9512 x5461
+ORG:Padberg LLC
+NOTE:Important contact - needs follow-up.
+ TODO: schedule catch-up call
+ --- CRM Log ---
+ 2026-05-04: Last connected at conference. Set reminder to reconnect.
+ Reconnect: 2 weeks
+END:VCARD

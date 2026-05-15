@@ -1,0 +1,25 @@
+[workspace]
+members = [
+    "pepper-crm",
+    # MCP servers will be added next:
+    # "mcp-vcard-server",
+    # "mcp-scheduler-server",
+    # "mcp-digest-server",
+    # "mcp-cal-server",
+    # "mcp-mailer-server",
+    # "pepper",  # The runner/orchestrator binary
+]
+resolver = "2"
+
+[workspace.dependencies]
+rmcp        = { version = "0.16", features = ["server", "transport-io"] }
+sqlx        = { version = "0.7", features = ["postgres", "runtime-tokio", "chrono", "uuid"] }
+tokio       = { version = "1", features = ["full"] }
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+anyhow      = "1"
+chrono      = { version = "0.4", features = ["serde"] }
+uuid        = { version = "1", features = ["v4", "serde"] }
+dotenvy     = "0.15"
+tracing     = "0.1"
+tracing-subscriber = "0.3"

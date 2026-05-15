@@ -1,0 +1,12 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:d954696a-0c9f-4bc0-a1fc-5b8c4df07b3b
+FN:Noah Taylor
+EMAIL;TYPE=INTERNET:gavin@example.com
+TEL;TYPE=CELL:901.024.7674 x2675
+ORG:Romaguera and Schmeler LLC
+ADR;TYPE=HOME:;;;Casper haven;CA;94000;Jordan
+NOTE:Active collaborator on crypto research.
+ TODO: send meeting notes
+ TODO: schedule call
+END:VCARD

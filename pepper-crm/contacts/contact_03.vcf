@@ -1,0 +1,10 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:ec2173a9-c6fd-47fd-9bc1-604d5b8e2cc4
+FN:Sofia Chen
+EMAIL;TYPE=INTERNET:cecelia@example.net
+TEL;TYPE=CELL:386.949.7435 x82780
+ORG:Spencer and Brakus Group
+ADR;TYPE=HOME:;;123 Main St;South Alden Grant stad;ND;656;Rwanda
+NOTE:Met at a networking event. Works in distributed systems.
+END:VCARD
