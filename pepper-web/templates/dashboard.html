@@ -1,3 +1,14 @@
+<!--
+  Pepper CRM Dashboard Page
+
+    Main web UI: stats, reconnects due, pending tasks, and next-week travel matches.
+
+  INPUT: Tera context from main.rs — tasks, reconnects, travel_trips, counts, flash flags, snooze options.
+  OUTPUT: Full HTML page with header partial, sections, and snooze.js for in-page updates.
+  NOTES: Travel list requires manual refresh; snooze forms POST to /travel/snooze.
+
+  Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>

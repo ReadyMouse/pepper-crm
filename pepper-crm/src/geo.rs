@@ -1,4 +1,19 @@
-//! Geocoding and distance helpers for travel matching.
+//! # Geocoding and Distance
+//!
+//!   Resolves place names to coordinates and computes Haversine distances for travel matching.
+//!   Provides Nominatim geocoder, file cache, and test fixtures.
+//!
+//! INPUT:
+//!   - Place query strings; `GeoPoint` pairs; env vars (`NOMINATIM_USER_AGENT`, cache TTL).
+//!
+//! OUTPUT:
+//!   - `GeoPoint`, `haversine_km`, and `Geocoder` trait implementations.
+//!
+//! NOTES:
+//!   - Nominatim requests are rate-limited to ~1 req/s; cache lives under `.cache/geocode/`.
+//!   - `DEFAULT_METRO_RADIUS_MI` (30) is the default proximity threshold for travel matches.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 /// Default metro radius when not set in the UI or env.
 pub const DEFAULT_METRO_RADIUS_MI: u32 = 30;

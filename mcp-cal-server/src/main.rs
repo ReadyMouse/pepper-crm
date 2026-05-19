@@ -1,3 +1,22 @@
+//! # MCP Calendar Export Server
+//!
+//!   MCP server (stdio) that generates iCalendar (.ics) attachments for due reconnects.
+//!
+//! INPUT:
+//!   - MCP tool `export_ics`: `{ "reconnects": [ReconnectItem, ...] }`
+//!     — ReconnectItem: contact_name, contact_email?, due_date, tag
+//!
+//! OUTPUT:
+//!   - `export_ics` → `[{ "filename": "reconnect_<name>.ics", "content": "<ics>" }, ...]`
+//!     — one .ics file per reconnect with calendar event and alarm
+//!
+//! NOTES:
+//!   - Server name: `mcp-cal-server`
+//!   - Filenames derive from contact_name (spaces → underscores, lowercased)
+//!   - Output lacks `content_type`; mailer callers should add `text/calendar` per attachment
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use anyhow::Result;
 use pepper_crm::build_ics;
 use rmcp::*;

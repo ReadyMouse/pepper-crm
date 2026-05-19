@@ -1,3 +1,19 @@
+//! # Reconnect ICS Generation
+//!
+//!   Builds iCalendar (.ics) attachments for pending reconnect reminders so they can be
+//!   imported into a calendar client with a one-day advance alarm.
+//!
+//! INPUT:
+//!   - `ReconnectRow` (contact name, due date, original tag, vCard UID).
+//!
+//! OUTPUT:
+//!   - `IcsFile` with filename and RFC 5545 calendar content (`VALARM` included).
+//!
+//! NOTES:
+//!   - Events are all-day on the due date; batch builder skips individual failures with a warning.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use crate::models::{IcsFile, ReconnectRow};
 use anyhow::Result;
 use icalendar::{Alarm, Calendar, Component, Event, EventLike};

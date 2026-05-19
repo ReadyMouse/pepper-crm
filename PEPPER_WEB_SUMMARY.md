@@ -1,124 +1,61 @@
-# Pepper Web Dashboard - Implementation Summary
+<!--
+# Pepper Web Dashboard — Summary
 
-## ✅ What Was Built
+  Short snapshot of pepper-web features; prefer pepper-web/README.md for details.
 
-A localhost web dashboard for visualizing and testing your Pepper CRM data.
+INPUT:
+  - pepper-web routes and templates
 
-### Features
+OUTPUT:
+  - Feature list, run instructions, related doc links
 
-1. **Dashboard Page** (`http://localhost:3000/`)
-   - Stats cards showing count of pending tasks and reconnects
-   - List of all pending tasks
-   - List of all due reconnects
-   - Clean, modern UI with the same styling as email digest
+NOTES:
+  - Superseded in part by README_pepper-web.md.
 
-2. **Contacts Page** (`http://localhost:3000/contacts`)
-   - Grid view of all contacts from database
-   - Shows name, email, phone, org, city
-   - Responsive card layout
-   - Hover effects
+Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+-->
 
-3. **Digest Preview** (`http://localhost:3000/preview`)
-   - Exact preview of what the weekly email will look like
-   - Uses the same Tera template as the actual digest
-   - Perfect for testing before sending emails
+# Pepper Web Dashboard — Summary
 
-### Technology Stack
+> **Note:** This file is a snapshot summary. Prefer [`pepper-web/README.md`](pepper-web/README.md) and the root [`README.md`](README.md) for current docs.
 
-- **Axum** - Web framework
-- **Tera** - Template engine (reuses email templates)
-- **SQLx** - Direct PostgreSQL queries
-- **Tower-HTTP** - Middleware (tracing, static files)
-- **pepper-crm** - Shared business logic
+## What it is
 
-### File Structure
+A localhost dashboard at **http://localhost:3000** for visualizing Pepper CRM data without sending emails.
 
-```
-pepper-web/
-├── Cargo.toml
-├── README.md
-├── src/
-│   └── main.rs           # Web server with 3 routes
-└── templates/
-    ├── dashboard.html    # Main overview page
-    ├── contacts.html     # Contacts list page
-    └── digest.html       # Email preview (copied from templates/)
-```
+## Live features
 
-## 🚀 How to Use
+1. **Dashboard** (`/`)
+   - Summary stats: pending tasks, reconnects due, travel matches
+   - **Reconnects Due** — 7-day window, snooze to VCF
+   - **Pending Tasks** — from VCF `TODO:` tags via PostgreSQL
+   - **Next Week Travel** — Google Calendar + geocoding + metro-radius matching; refresh on demand
 
-### 1. Build (outside Cursor to avoid sandbox)
+2. **Digest Preview** (`/preview`)
+   - Preview of the weekly email (tasks + reconnects)
+
+## Removed / not built
+
+- **Contacts page** (`/contacts`) — removed; VCF files are the people store
+- **Random Person of the Week** — coming soon ([`DASHBOARD_SECTIONS.md`](DASHBOARD_SECTIONS.md))
+
+## How to run
 
 ```bash
 cargo build --workspace
-```
+cp .env.example .env   # set DATABASE_URL, optional GOOGLE_CALENDAR_ICS_URL
 
-### 2. Set up database (if not already done)
-
-```bash
-createdb pepper_crm
-psql pepper_crm < migrations/001_initial.sql
-```
-
-### 3. Sync contacts to database
-
-```bash
-# Run pepper in dry-run to sync contacts
-./target/debug/pepper --dry-run
-```
-
-This will:
-- Parse all VCF files from `contacts/`
-- Sync them to PostgreSQL
-- Show you what would be sent (but not send)
-
-### 4. Start web server
-
-```bash
 cargo run --bin pepper-web
 ```
 
-### 5. Open browser
+Sync happens on startup. Alternatively run `./target/debug/pepper --dry-run` first.
 
-Visit:
-- http://localhost:3000 - Dashboard
-- http://localhost:3000/contacts - All contacts
-- http://localhost:3000/preview - Digest preview
+## Stack
 
-## 🎯 Development Workflow
+Axum · Tera · SQLx · pepper-crm · theme.css + snooze.js
 
-```
-1. Edit VCF files in contacts/
-2. Run: pepper --dry-run (syncs to DB)
-3. Refresh browser to see changes
-4. Check /preview to see what email will contain
-5. Run: pepper (sends actual email)
-```
+## Related docs
 
-## 🎨 Styling
-
-All pages use consistent styling:
-- Pepper red (#d32f2f) as primary color
-- 🌶️ emoji branding
-- Clean cards with shadows
-- Responsive grid layouts
-- Hover effects
-- Same aesthetic as email digest
-
-## 📝 Next Enhancements (Optional)
-
-Future ideas:
-- Add search/filter on contacts page
-- Show individual contact detail pages
-- Display CRM log history
-- Add forms to mark tasks complete
-- Real-time updates with WebSockets
-- Dark mode toggle
-
-## ✨ Benefits
-
-- **Testing**: See what digest will contain before sending
-- **Visualization**: Better understand your CRM data
-- **Debugging**: Quickly spot issues with contacts or tasks
-- **Development**: Fast iteration without sending test emails
-- **Monitoring**: Check system status at a glance
+- [`pepper-web/README.md`](pepper-web/README.md) — routes, file layout, dev workflow
+- [`NEXT_WEEK_TRAVEL_BUILD.md`](NEXT_WEEK_TRAVEL_BUILD.md) — travel matching design
+- [`DASHBOARD_SECTIONS.md`](DASHBOARD_SECTIONS.md) — product spec for all dashboard sections

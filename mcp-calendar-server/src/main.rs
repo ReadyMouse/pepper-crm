@@ -1,3 +1,22 @@
+//! # MCP Google Calendar Server
+//!
+//!   MCP server (stdio) that fetches a Google Calendar ICS feed and returns travel
+//!   trips scheduled for next week (event SUMMARY = destination).
+//!
+//! INPUT:
+//!   - Env: `GOOGLE_CALENDAR_ICS_URL` (public or private ICS URL)
+//!   - MCP tool `get_upcoming_travel`: `{ "as_of"?: "YYYY-MM-DD" }` (defaults to today)
+//!
+//! OUTPUT:
+//!   - `get_upcoming_travel` → `[{ "title", "start", "end" }, ...]` (ISO date strings)
+//!
+//! NOTES:
+//!   - Server name: `mcp-calendar-server`
+//!   - Uses pepper-crm `fetch_ics` and `trips_for_next_week`
+//!   - Not spawned by the pepper orchestrator (travel uses pepper-crm / mcp-travel-server)
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use anyhow::{Context, Result};
 use chrono::Local;
 use pepper_crm::{fetch_ics, trips_for_next_week};

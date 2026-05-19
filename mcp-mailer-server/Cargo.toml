@@ -1,3 +1,19 @@
+# MCP Mailer Server Package
+#
+#   Cargo manifest for the MCP server that sends HTML digest emails via SMTP.
+#
+# INPUT:
+#   - N/A (package metadata and dependency declarations)
+#
+# OUTPUT:
+#   - `mcp-mailer-server` binary exposing the `send_email` MCP tool
+#
+# NOTES:
+#   - Requires SMTP env vars at runtime (see main.rs)
+#   - Uses lettre for multipart HTML + attachment delivery
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 [package]
 name = "mcp-mailer-server"
 version = "0.1.0"

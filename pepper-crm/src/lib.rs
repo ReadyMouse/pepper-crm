@@ -1,3 +1,19 @@
+//! # Pepper CRM Library Root
+//!
+//!   Crate entry point for the personal CRM core: vCard contacts, reconnect tags,
+//!   PostgreSQL sync, calendar travel matching, and geocoding.
+//!
+//! INPUT:
+//!   - None at the crate root (consumers import modules and re-exports).
+//!
+//! OUTPUT:
+//!   - Public modules and re-exported types/functions for contacts, tags, DB, travel, and geo.
+//!
+//! NOTES:
+//!   - Re-exports mirror the most common integration surface for the dashboard and CLI.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 pub mod calendar;
 pub mod contact_geo;
 pub mod db;

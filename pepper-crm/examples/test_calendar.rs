@@ -1,5 +1,20 @@
-//! Quick check: fetch ICS and list next-week trips.
-//! Run: cargo run -p pepper-crm --example test_calendar
+//! # Test Calendar Example
+//!
+//!   End-to-end check: fetch Google Calendar ICS, list next-week trips, then run a full travel
+//!   snapshot build with geocoding and contact matching.
+//!
+//! INPUT:
+//!   - `GOOGLE_CALENDAR_ICS_URL` and other env vars via `.env` (`CONTACTS_DIR`, cache paths).
+//!
+//! OUTPUT:
+//!   - Stdout: ICS preview, trip list, snapshot week id, and per-trip match details.
+//!
+//! NOTES:
+//!   - Run: `cargo run -p pepper-crm --example test_calendar`
+//!   - Rejects embed URLs; expects secret iCal feed ending in `basic.ics`.
+//!   - Forces a fresh snapshot build (`config.force = true`).
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use anyhow::Result;
 use chrono::Local;

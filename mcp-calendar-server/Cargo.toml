@@ -1,3 +1,19 @@
+# MCP Google Calendar Server Package
+#
+#   Cargo manifest for the MCP server that fetches upcoming travel from Google Calendar ICS.
+#
+# INPUT:
+#   - N/A (package metadata and dependency declarations)
+#
+# OUTPUT:
+#   - `mcp-calendar-server` binary exposing the `get_upcoming_travel` MCP tool
+#
+# NOTES:
+#   - Requires `GOOGLE_CALENDAR_ICS_URL` at runtime
+#   - Distinct from mcp-cal-server (local .ics export for reconnects)
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 [package]
 name = "mcp-calendar-server"
 version = "0.1.0"

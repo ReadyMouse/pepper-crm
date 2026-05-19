@@ -1,3 +1,19 @@
+# MCP Calendar Export Server Package
+#
+#   Cargo manifest for the MCP server that exports reconnect reminders as .ics files.
+#
+# INPUT:
+#   - N/A (package metadata and dependency declarations)
+#
+# OUTPUT:
+#   - `mcp-cal-server` binary exposing the `export_ics` MCP tool
+#
+# NOTES:
+#   - Uses pepper-crm `build_ics` for iCalendar generation with alarms
+#   - Distinct from mcp-calendar-server (Google Calendar ICS fetch)
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 [package]
 name = "mcp-cal-server"
 version = "0.1.0"

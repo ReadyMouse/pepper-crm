@@ -1,3 +1,19 @@
+# MCP Digest Server Package
+#
+#   Cargo manifest for the MCP server that renders the weekly CRM email digest.
+#
+# INPUT:
+#   - N/A (package metadata and dependency declarations)
+#
+# OUTPUT:
+#   - `mcp-digest-server` binary exposing the `render_digest` MCP tool
+#
+# NOTES:
+#   - Uses Tera templates from `templates/**/*.html` at runtime
+#   - No pepper-crm dependency; task/reconnect shapes are defined locally
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 [package]
 name = "mcp-digest-server"
 version = "0.1.0"

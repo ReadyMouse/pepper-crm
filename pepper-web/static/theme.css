@@ -1,3 +1,15 @@
+/*
+  Pepper CRM Web Theme Stylesheet
+
+    Visual design for pepper-web dashboard and digest preview pages.
+
+  INPUT: Linked from dashboard.html and preview.html as /static/theme.css.
+  OUTPUT: Teal/grey layout, stats cards, travel sections, digest preview card, snooze form styles.
+  NOTES: Email digest uses inline CSS in templates/digest.html, not this file.
+
+  Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+*/
+
 /* Pepper CRM — teal header, grey body, teal accents */
 
 :root {

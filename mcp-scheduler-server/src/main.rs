@@ -1,3 +1,27 @@
+//! # MCP Scheduler Server
+//!
+//!   MCP server (stdio) that upserts contacts from VCF summaries into Postgres and
+//!   returns pending tasks and due reconnects for the digest pipeline.
+//!
+//! INPUT:
+//!   - Env: `DATABASE_URL` (Postgres connection string)
+//!   - MCP tool `upsert_contacts`: `{ "contacts": [ContactInput, ...] }`
+//!     — each ContactInput: uid, full_name, email?, phone?, org?, city?, country?,
+//!       todos[], reconnect_tag?, vcf_path
+//!   - MCP tool `get_due`: `{ "as_of"?: "YYYY-MM-DD" }` (defaults to today)
+//!
+//! OUTPUT:
+//!   - `upsert_contacts` → summary string (e.g. `"Upserted N contacts"`)
+//!   - `get_due` → `{ "tasks": [TaskSummary], "reconnects": [ReconnectSummary] }`
+//!     — TaskSummary: id, contact_uid, contact_name, description, status
+//!     — ReconnectSummary: id, contact_uid, contact_name, due_date, tag, status
+//!
+//! NOTES:
+//!   - Server name: `mcp-scheduler-server`
+//!   - Upsert syncs embedded todos and reconnect tags from each contact
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use anyhow::Result;
 use chrono::NaiveDate;
 use pepper_crm::*;

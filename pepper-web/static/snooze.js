@@ -1,3 +1,15 @@
+/*
+  Pepper CRM Reconnect Snooze Handler
+
+    Intercepts snooze form submits and updates the dashboard without a full page reload.
+
+  INPUT: DOM — .travel-snooze-form elements, [data-snooze-row] rows, stat-*-count elements.
+  OUTPUT: POST /travel/snooze with Accept: application/json; removes row, decrements stats, shows flash.
+  NOTES: Loaded by dashboard.html; server returns JSON when Accept header requests it.
+
+  Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+*/
+
 (function () {
   function decrementStat(counter) {
     if (!counter) return;

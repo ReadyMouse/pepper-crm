@@ -1,182 +1,298 @@
-# Pepper - Personal CRM Agent
+<!--
+# Pepper — Repository README
 
-A lightweight personal CRM agent built as a Rust MCP server workspace. It reads contact data from `.vcf` (vCard) files, parses structured tags from the notes field, manages task state in PostgreSQL, and sends a weekly HTML email digest with `.ics` calendar attachments for upcoming follow-ups.
+  Top-level project overview, setup, and feature status for the Pepper personal CRM workspace.
 
-Meet **Pepper** - your friendly personal CRM assistant that helps you stay connected with your network.
+INPUT:
+  - None (human-facing entry point)
+
+OUTPUT:
+  - Setup instructions, architecture summary, links to folder docs
+
+NOTES:
+  - See README_*.md files for per-folder detail; DOCUMENTATION_PROGRESS.md tracks doc agent runs.
+
+Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+-->
+
+# Pepper — Personal CRM Agent
+
+A lightweight personal CRM agent built as a Rust MCP server workspace. It reads contact data from `.vcf` (vCard) files, parses structured tags from notes and categories, manages task state in PostgreSQL, sends a weekly HTML email digest with `.ics` calendar attachments, and surfaces who you should reconnect with based on your travel schedule.
+
+Meet **Pepper** — your friendly personal CRM assistant that helps you stay connected with your network.
 
 ## Current Status
 
-✅ **Phase 1 Complete: pepper-crm and Test Data**
+### Core library (`pepper-crm`)
 
-The core library and test contact generator have been implemented:
+Shared business logic for the whole workspace:
 
-- **pepper-crm**: Shared library containing all business logic
-  - VCF parsing and write-back (`vcard.rs`)
-  - Tag extraction (`tags.rs`)
-  - PostgreSQL database operations (`db.rs`)
-  - iCalendar generation (`ical.rs`)
-  - Data models (`models.rs`)
-  
-- **Test Contact Generator**: 20 realistic fake VCF contacts with various scenarios
-  - 3 contacts with no tags
-  - 3 with TODO only
-  - 3 with Reconnect due this week
-  - 3 with multiple TODOs + Reconnect
-  - 2 with city triggers (deferred)
-  - 2 with existing CRM Log blocks
-  - 2 with overdue reconnects
-  - 2 with incomplete records
+| Module | Purpose |
+|--------|---------|
+| `vcard.rs` | VCF parsing, write-back, geo fields |
+| `tags.rs` | `TODO:` / `Reconnect:` extraction and due-date logic |
+| `db.rs` | PostgreSQL task state (sqlx) |
+| `ical.rs` | `.ics` generation with reminders |
+| `calendar.rs` | Google Calendar ICS fetch, next-week trip parsing |
+| `geo.rs` | Nominatim geocoding with query cache |
+| `contact_geo.rs` | Batch geocode contacts, optional write-back to VCF |
+| `travel.rs` | Metro-radius matching for upcoming trips |
+| `travel_cache.rs` | Weekly travel snapshot cache |
+| `models.rs` | Shared structs |
+
+### MCP servers (stdio transport)
+
+Thin binaries that expose `pepper-crm` as MCP tools for agents and the weekly runner:
+
+| Server | Tools |
+|--------|-------|
+| `mcp-vcard-server` | `parse_vcards`, `log_interaction` |
+| `mcp-scheduler-server` | `upsert_contacts`, `get_due` |
+| `mcp-digest-server` | `render_digest` |
+| `mcp-cal-server` | `export_ics` |
+| `mcp-mailer-server` | `send_email` |
+| `mcp-calendar-server` | `get_upcoming_travel` |
+| `mcp-travel-server` | `build_travel_week`, `get_travel_week` |
+
+### Weekly orchestrator (`pepper`)
+
+The `pepper` binary spawns MCP servers over stdio and runs the full weekly flow:
+
+1. Parse VCF contacts
+2. Sync tasks/reconnects to PostgreSQL
+3. Query due items
+4. Render HTML digest
+5. Generate `.ics` attachments
+6. Send email (or dry-run)
+7. Build travel match snapshot (once per week, if calendar is configured)
+
+### Web dashboard (`pepper-web`)
+
+Localhost UI at **http://localhost:3000**:
+
+- **Dashboard** (`/`) — Pending tasks, reconnects due, next-week travel matches
+- **Digest Preview** (`/preview`) — Live preview of the weekly email
+
+Dashboard features that are live today:
+
+- VCF → PostgreSQL sync on startup
+- Pending `TODO:` tasks from the database
+- Reconnects due within 7 days (from VCF `CATEGORIES` / `REV` / note anchors)
+- **Next Week Travel** — calendar + geocoding + metro-radius matching
+- Snooze reconnect intervals (writes back to VCF, removes from travel list)
+- On-demand travel refresh with configurable metro radius
+
+Coming soon: Random Person of the Week (see [`DASHBOARD_SECTIONS.md`](DASHBOARD_SECTIONS.md)).
 
 ## Project Structure
 
 ```
-pepper/
-├── Cargo.toml              # workspace root
-├── .env.example            # environment variables template
-├── contacts/               # 20 test .vcf files
-│   └── contact_*.vcf
-├── pepper-crm/             # core library
+pepper-crm/
+├── Cargo.toml                  # workspace root
+├── .env.example                # environment variables template
+├── contacts/                   # local .vcf files (test + real exports)
+├── pepper-crm/                 # core library
 │   ├── src/
-│   │   ├── lib.rs
-│   │   ├── vcard.rs       # VCF parsing and write-back
-│   │   ├── tags.rs        # TODO:/Reconnect: tag extraction
-│   │   ├── db.rs          # PostgreSQL queries
-│   │   ├── models.rs      # shared structs
-│   │   └── ical.rs        # .ics generation
+│   │   ├── vcard.rs
+│   │   ├── tags.rs
+│   │   ├── db.rs
+│   │   ├── ical.rs
+│   │   ├── calendar.rs
+│   │   ├── geo.rs
+│   │   ├── contact_geo.rs
+│   │   ├── travel.rs
+│   │   └── travel_cache.rs
+│   ├── examples/               # list_due_reconnects, test_calendar, etc.
 │   └── tests/
-│       └── generate_test_contacts.rs
-├── mcp-vcard-server/       # VCF read/write MCP server
-├── mcp-scheduler-server/   # Database sync MCP server
-├── mcp-digest-server/      # Email rendering MCP server
-├── mcp-cal-server/         # iCalendar export MCP server
-├── mcp-mailer-server/      # SMTP email MCP server
-├── pepper/                 # CLI orchestrator
-├── assets/                 # Shared media (brand avatars, etc.)
-│   └── brand/              # pepper_avatar_teal.png, pepper_avatar_white.png
-├── pepper-web/             # Web dashboard (localhost:3000)
-├── templates/              # Email templates
-└── migrations/
-    └── 001_initial.sql    # PostgreSQL schema
+├── mcp-vcard-server/
+├── mcp-scheduler-server/
+├── mcp-digest-server/
+├── mcp-cal-server/
+├── mcp-mailer-server/
+├── mcp-calendar-server/
+├── mcp-travel-server/
+├── pepper/                     # weekly orchestrator CLI
+├── pepper-web/                 # web dashboard
+├── assets/brand/               # pepper avatars
+├── templates/                  # email digest template
+├── migrations/
+│   └── 001_initial.sql
+└── .cache/                     # geocode + travel snapshots (gitignored)
 ```
 
-## Next Steps
+## Setup
 
-The following MCP server binaries need to be implemented:
-
-1. **mcp-vcard-server** - VCF read/write tools
-2. **mcp-scheduler-server** - Due items scheduler
-3. **mcp-digest-server** - HTML email renderer
-4. **mcp-cal-server** - iCalendar file generator
-5. **mcp-mailer-server** - SMTP email sender
-6. **pepper** - MCP client orchestrator (the runner binary)
-
-Each server is a thin wrapper around `pepper-crm` functionality, exposing tools via the `rmcp` framework using stdio transport.
-
-Eventually, **Pepper** will also be your friendly Matrix bot that you can chat with to manage your contacts!
-
-## Setup Instructions
-
-### 1. Install Dependencies
+### 1. Install dependencies
 
 ```bash
-# Install Rust (if not already installed)
+# Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Install PostgreSQL (macOS)
-brew install postgresql
+# PostgreSQL (macOS)
+brew install postgresql@16
+brew services start postgresql@16
 ```
 
-### 2. Set Up Database
+### 2. Database
 
 ```bash
-# Create database
 createdb pepper_crm
-
-# Run migrations
 psql pepper_crm < migrations/001_initial.sql
 ```
 
-### 3. Configure Environment
+### 3. Environment
 
 ```bash
-# Copy example environment file
 cp .env.example .env
-
-# Edit .env with your settings
-# - DATABASE_URL: PostgreSQL connection string
-# - SMTP_*: Email server credentials
-# - DIGEST_RECIPIENT: Your email address
 ```
 
-### 4. Build and Test
+Edit `.env`:
+
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` | PostgreSQL connection (use your macOS username from `whoami`) |
+| `CONTACTS_DIR` | Path to `.vcf` files (default `./contacts`) |
+| `CACHE_DIR` | Geocode + travel cache (default `.cache`) |
+| `SMTP_*` / `DIGEST_RECIPIENT` | Weekly email delivery |
+| `GOOGLE_CALENDAR_ICS_URL` | Secret ICS link for travel matching |
+| `NOMINATIM_USER_AGENT` | Required for geocoding (include your email) |
+| `GEO_WRITE_TO_VCF` | Write lat/lng back to vCards after geocoding (default on) |
+
+### 4. Build
 
 ```bash
-# Build the core library
-cargo build -p pepper-crm
-
-# Run tests (including VCF parsing tests)
-cargo test -p pepper-crm
-
-# Regenerate test contacts (if needed)
-cargo test -p pepper-crm --test generate_test_contacts -- --ignored
+cargo build --workspace
 ```
 
-## Web Dashboard 🌶️
-
-For testing and visualization, run the web dashboard:
+### 5. Sync contacts and preview
 
 ```bash
+# Sync VCF → DB and preview digest (no email sent)
+./target/debug/pepper --dry-run
+
+# Start the dashboard
 cargo run --bin pepper-web
 ```
 
-Then open: **http://localhost:3000**
+Open **http://localhost:3000**. For travel matches, set `GOOGLE_CALENDAR_ICS_URL`, then click **Refresh travel matches** on the dashboard.
 
-### Pages
-- **Dashboard** (`/`) — Layout blueprint with all product sections (Coming Soon)
-- **Digest Preview** (`/preview`) — Live preview of the weekly email digest
+### 6. Send the weekly digest
 
-Feature specs: [`DASHBOARD_SECTIONS.md`](DASHBOARD_SECTIONS.md)
+```bash
+./target/debug/pepper
+# or dry-run first:
+./target/debug/pepper --dry-run --recipient you@example.com
+```
 
-## Test Contacts
+Flags:
 
-The `contacts/` directory contains 20 generated test contacts covering various scenarios:
-
-- **contact_01.vcf - contact_03.vcf**: No tags (baseline contacts)
-- **contact_04.vcf - contact_06.vcf**: TODO items only
-- **contact_07.vcf - contact_09.vcf**: Reconnect reminders due this week
-- **contact_10.vcf - contact_12.vcf**: Multiple TODOs + Reconnect
-- **contact_13.vcf - contact_14.vcf**: City triggers (deferred)
-- **contact_15.vcf - contact_16.vcf**: Existing CRM Log entries
-- **contact_17.vcf - contact_18.vcf**: Overdue reconnects
-- **contact_19.vcf - contact_20.vcf**: Incomplete contact records
-
-## Design Principles
-
-- **VCF is the people store**: Contact data lives in vCards, DB holds only task state
-- **Notes field is human-readable first**: Plain text tags, no binary formats
-- **Write-back is append-only**: Never modifies existing content, only appends
-- **Last tag wins**: Most recent tag is authoritative
-- **Dry-run always works**: Safe testing without side effects
-- **Prototype locally, promote to Pi**: Local files now, CardDAV later
-- **stdio now, HTTP/SSE later**: Easy development, smooth upgrade path
+- `--dry-run` — no email, no side effects beyond sync
+- `--recipient` — override `DIGEST_RECIPIENT`
+- `--force-travel` — rebuild travel snapshot even if one exists for next week
+- `--contacts-dir` — override `CONTACTS_DIR`
 
 ## Tag Format
 
-Tags are written one per line in the `NOTE` field:
+Tags live in human-readable vCard fields. You can edit them in any contacts app.
+
+### `TODO:` (in `NOTE`)
+
+One per line, above the CRM log separator:
 
 ```
 July 2026: Met at conference. Works on crypto.
 
 TODO: send intro email
 TODO: share grant template
-
 ```
 
-"Reconnect: 3 months" is a tag that can be added. 
+### `Reconnect:` (in `CATEGORIES`)
 
-Supported tags:
-- `TODO: [description]` - Create a task
-- `Reconnect: N days/weeks/months` - Schedule timed follow-up
+Reconnect scheduling lives in **vCard categories**, not in notes:
+
+```
+CATEGORIES:Reconnect: 3 months
+```
+
+Supported values:
+
+- **Timed intervals** — `1 week`, `3 months`, `1 year`, etc.
+- **Trip triggers** — `before Chicago trip` (matched when you travel there)
+- **Opt out** — `Reconnect: Never` (excluded from travel suggestions)
+
+Legacy `Reconnect:` lines in `NOTE` are still read as a fallback.
+
+Due dates anchor from vCard `REV` or the latest `Month YYYY:` note line (e.g. `May 2026: Had coffee`).
+
+### CRM log (append-only)
+
+After interactions, Pepper appends below a separator — existing note content is never modified:
+
+```
+--- CRM Log ---
+2026-05-14: Sent follow-up email.
+```
+
+## Test Contacts
+
+The `contacts/` directory includes generated test VCFs covering common scenarios:
+
+| Files | Scenario |
+|-------|----------|
+| `contact_01`–`03` | No tags (baseline) |
+| `contact_04`–`06` | TODO only |
+| `contact_07`–`09` | Reconnect due this week |
+| `contact_10`–`12` | Multiple TODOs + Reconnect |
+| `contact_13`–`14` | City/trip triggers |
+| `contact_15`–`16` | Existing CRM log blocks |
+| `contact_17`–`18` | Overdue reconnects |
+| `contact_19`–`20` | Incomplete records |
+
+Regenerate test contacts:
+
+```bash
+cargo test -p pepper-crm --test generate_test_contacts -- --ignored
+```
+
+## Design Principles
+
+- **VCF is the people store** — contact data lives in vCards; PostgreSQL holds task state only
+- **Notes field is human-readable first** — plain text tags, no binary formats
+- **Write-back is append-only** — never modifies existing content, only appends
+- **Last tag wins** — most recent `Reconnect:` is authoritative
+- **Dry-run always works** — safe testing without side effects
+- **Prototype locally, promote to Pi** — local files now, CardDAV later
+- **stdio now, HTTP/SSE later** — easy development, smooth upgrade path for agents
+
+## Documentation
+
+| Doc | Description |
+|-----|-------------|
+| [`DOCUMENTATION_PROGRESS.md`](DOCUMENTATION_PROGRESS.md) | Doc-agent checklist (file headers + progress) |
+| [`README_pepper-crm.md`](README_pepper-crm.md) | Core library crate |
+| [`README_pepper-web.md`](README_pepper-web.md) | Web dashboard |
+| [`README_pepper.md`](README_pepper.md) | Weekly orchestrator CLI |
+| [`README_mcp-servers.md`](README_mcp-servers.md) | MCP server binaries |
+| [`README_contacts.md`](README_contacts.md) | VCF fixtures (no inline headers — parser-safe) |
+| [`README_assets.md`](README_assets.md) | Brand images |
+| [`README_migrations.md`](README_migrations.md) | PostgreSQL schema |
+| [`README_templates.md`](README_templates.md) | Email templates |
+| [`personal_crm_design.md`](personal_crm_design.md) | Full design document |
+| [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) | Built vs. planned |
+| [`DASHBOARD_SECTIONS.md`](DASHBOARD_SECTIONS.md) | Dashboard product spec |
+| [`NEXT_WEEK_TRAVEL_BUILD.md`](NEXT_WEEK_TRAVEL_BUILD.md) | Travel matching implementation |
+
+Source files include a standard header block (Rust `//!`, HTML/CSS/JS comments, etc.) describing purpose, inputs, outputs, and notes.
+
+## What's Next
+
+- CardDAV read/write (Radicale on Pi)
+- Random Person of the Week + web enrichment
+- Matrix bot ("chat with Pepper")
+- HTTP/SSE transport for persistent MCP daemons
+- Digest includes travel section
+
+See [`personal_crm_design.md`](personal_crm_design.md) for the full design doc and [`NEXT_WEEK_TRAVEL_BUILD.md`](NEXT_WEEK_TRAVEL_BUILD.md) for travel matching details.
 
 ## License
 

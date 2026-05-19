@@ -1,3 +1,20 @@
+# Pepper CRM Core Library
+#
+#   Rust library crate for vCard contact parsing, reconnect tag logic, PostgreSQL sync,
+#   calendar travel matching, and geocoding. Consumed by the dashboard and CLI examples.
+#
+# INPUT:
+#   - VCF files (CONTACTS_DIR), PostgreSQL (DATABASE_URL), optional Google Calendar ICS URL.
+#
+# OUTPUT:
+#   - `pepper-crm` rlib with public modules re-exported from lib.rs.
+#
+# NOTES:
+#   - Workspace dependencies (sqlx, tokio, serde, etc.) are inherited from the repo root.
+#   - Examples: parse_contacts, test_calendar; integration test generates sample VCFs.
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 [package]
 name = "pepper-crm"
 version = "0.1.0"

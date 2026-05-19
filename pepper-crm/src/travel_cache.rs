@@ -1,4 +1,19 @@
-//! Read/write weekly travel match snapshots (`.cache/travel/{week}.json`).
+//! # Travel Snapshot Cache
+//!
+//!   Persists and loads weekly `TravelWeekSnapshot` JSON files and resolves the target ISO week
+//!   for builds (with optional `TRAVEL_WEEK_OVERRIDE`).
+//!
+//! INPUT:
+//!   - Cache root path, `week_id` string, `as_of` date, snapshot JSON on disk.
+//!
+//! OUTPUT:
+//!   - `TravelWeekSnapshot` load/save; snapshot file paths; contact removal from current week cache.
+//!
+//! NOTES:
+//!   - Files live at `.cache/travel/{week_id}.json` (e.g. `2026-W21.json`).
+//!   - `load_current_snapshot` drops snapshots whose stored `week_id` does not match the target week.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use crate::calendar::{iso_week_id, next_week_range};
 use crate::models::TravelWeekSnapshot;

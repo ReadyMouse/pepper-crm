@@ -1,3 +1,20 @@
+<!--
+# Personal CRM Agent — Design Document
+
+  Authoritative architecture and scope document for the Pepper CRM prototype.
+
+INPUT:
+  - Product requirements, vCard/tag conventions, MCP transport decisions
+
+OUTPUT:
+  - Design principles, crate layout, database schema, weekly run sequence
+
+NOTES:
+  - Some crate names differ from implementation (e.g. crm-core → pepper-crm); README is canonical for current layout.
+
+Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+-->
+
 # Personal CRM Agent — Design Document
 
 > **For:** Claude (via Cursor IDE)

@@ -1,3 +1,19 @@
+; Travel Calendar Test Fixture
+;
+;   Minimal ICS feed for unit tests: one all-day Chicago trip overlapping next week
+;   when as_of = 2026-05-18 (used by calendar and travel module tests).
+;
+; INPUT:
+;   - Parsed as raw ICS string (include_str! in tests).
+;
+; OUTPUT:
+;   - One VEVENT: SUMMARY "Chicago, IL", DTSTART 2026-05-26, DTEND 2026-05-30 (exclusive).
+;
+; NOTES:
+;   - Comment lines are ignored by the Pepper ICS parser (skipped outside VEVENT blocks).
+;
+; Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Pepper CRM//Travel Test//EN

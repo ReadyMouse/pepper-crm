@@ -1,4 +1,12 @@
--- migrations/001_initial.sql
+-- Pepper CRM Initial Schema
+--
+--   Creates core PostgreSQL tables for contacts, tasks, reconnects, and digest audit log.
+--
+-- INPUT: Applied once to a fresh pepper_crm database (e.g. via sqlx migrate).
+-- OUTPUT: Tables `contacts`, `tasks`, `reconnects`, `digest_log` plus indexes on common queries.
+-- NOTES: Contacts keyed by vCard UID; tasks/reconnects cascade on contact delete.
+--
+-- Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 

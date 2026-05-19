@@ -1,3 +1,20 @@
+//! # PostgreSQL Persistence
+//!
+//!   Upserts contacts, tasks, and reconnect reminders into Postgres and queries due items
+//!   for digest emails and dashboard views.
+//!
+//! INPUT:
+//!   - `PgPool`, parsed `Contact` slices, window days, reconnect/task UUIDs.
+//!
+//! OUTPUT:
+//!   - `UpsertResult`, `TaskRow`, `ReconnectRow`, and digest log entries.
+//!
+//! NOTES:
+//!   - Reconnect due dates come from vCard tags via `tags::reconnect_due_date`, not stored on contacts.
+//!   - City-trigger reconnects are stored as `deferred` with a far-future due date.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use crate::models::*;
 use crate::tags::{
     is_city_trigger, is_reconnect_never, reconnect_due_date, resolve_reconnect_tag,

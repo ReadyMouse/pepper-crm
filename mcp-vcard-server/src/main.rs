@@ -1,3 +1,22 @@
+//! # MCP vCard Server
+//!
+//!   MCP server (stdio) for reading contact VCF files and appending CRM interaction logs.
+//!
+//! INPUT:
+//!   - MCP tool `parse_vcards`: `{ "directory": "<path>" }` — directory of `.vcf` files
+//!   - MCP tool `log_interaction`: `{ "vcf_path", "note", "new_reconnect_tag"? }`
+//!
+//! OUTPUT:
+//!   - `parse_vcards` → `[ContactSummary, ...]` with uid, full_name, email, phone, org,
+//!     city, state, country, categories, note_raw, todos, reconnect_tag, vcf_path
+//!   - `log_interaction` → confirmation string (e.g. `"Logged interaction to <name>"`)
+//!
+//! NOTES:
+//!   - Server name: `mcp-vcard-server`
+//!   - `log_interaction` rewrites the contact VCF append-only (note + optional reconnect tag)
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use anyhow::Result;
 use pepper_crm::{parse_vcard, parse_vcards_from_dir, log_interaction, Contact};
 use rmcp::*;

@@ -1,5 +1,18 @@
-//! Count contacts parsed from CONTACTS_DIR (including multi-vCard files).
-//! Run: cargo run -p pepper-crm --example parse_contacts
+//! # Parse Contacts Example
+//!
+//!   CLI smoke test that parses all VCF files in CONTACTS_DIR and prints summary counts.
+//!
+//! INPUT:
+//!   - `CONTACTS_DIR` from env or `.env` (default `./contacts`).
+//!
+//! OUTPUT:
+//!   - Stdout: total parsed contacts, count with city/address, and RI-related heuristic count.
+//!
+//! NOTES:
+//!   - Run: `cargo run -p pepper-crm --example parse_contacts`
+//!   - Handles multi-vCard single-file exports (Apple/Google format).
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use anyhow::Result;
 use pepper_crm::parse_vcards_from_dir;

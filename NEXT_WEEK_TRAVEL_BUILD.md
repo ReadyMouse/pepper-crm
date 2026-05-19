@@ -1,3 +1,20 @@
+<!--
+# Next Week Travel — Build Guide
+
+  Implementation guide for calendar + geocoding + metro-radius travel matching.
+
+INPUT:
+  - Google Calendar ICS URL, VCF contacts with ADR/CATEGORIES, Nominatim geocoder
+
+OUTPUT:
+  - Weekly travel snapshot in .cache/travel/, dashboard display spec
+
+NOTES:
+  - Reconnect: lives in CATEGORIES; Reconnect: Never is hard-filtered.
+
+Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+-->
+
 # Next Week Travel — Build Guide
 
 Implementation guide for the **Next Week Travel** dashboard section. Product spec: [`DASHBOARD_SECTIONS.md`](DASHBOARD_SECTIONS.md) §4.

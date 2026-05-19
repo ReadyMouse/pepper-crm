@@ -1,3 +1,13 @@
+//! Pepper Web Dashboard Server
+//!
+//!   Axum HTTP server for visualizing Pepper CRM data: tasks, reconnects, and travel matches.
+//!
+//! INPUT: DATABASE_URL, CONTACTS_DIR, CACHE_DIR, GOOGLE_CALENDAR_ICS_URL (optional); VCF files; PostgreSQL.
+//! OUTPUT: Routes `/` (dashboard), `/preview` (digest preview), `/travel/refresh`, `/travel/snooze`; static assets.
+//! NOTES: Syncs VCF → PostgreSQL on startup; travel snapshot built on demand, not every page load.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use anyhow::{Context, Result};
 use axum::{
     extract::{Query, State},

@@ -1,3 +1,20 @@
+//! # NOTE and CATEGORIES Tag Parsing
+//!
+//!   Parses CRM tags from vCard NOTE and CATEGORIES fields: TODOs, Reconnect intervals,
+//!   month/year interaction stamps, venue filters, and travel eligibility rules.
+//!
+//! INPUT:
+//!   - NOTE text, category strings, anchor dates (`REV` or `Month YYYY:` notes), `as_of` date.
+//!
+//! OUTPUT:
+//!   - Due dates, reconnect lists, log append strings, and travel-match eligibility booleans.
+//!
+//! NOTES:
+//!   - City triggers (`before … trip`) defer interval math; `Never` and venue cards are excluded.
+//!   - `TRAVEL_INTERACTION_WINDOW_MONTHS` (18) gates stale contacts from travel lists.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use chrono::NaiveDate;
 use regex::Regex;
 

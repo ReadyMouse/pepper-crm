@@ -1,3 +1,19 @@
+# Pepper Orchestrator Package
+#
+#   Cargo manifest for the Pepper CRM weekly digest orchestrator CLI binary.
+#
+# INPUT:
+#   - N/A (package metadata and dependency declarations)
+#
+# OUTPUT:
+#   - `pepper` binary (src/main.rs) that coordinates MCP servers for digest workflow
+#
+# NOTES:
+#   - Depends on pepper-crm library and rmcp for MCP stdio clients
+#   - Built as part of the pepper-crm workspace; run via `cargo run -p pepper`
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 [package]
 name = "pepper"
 version = "0.1.0"

@@ -1,3 +1,19 @@
+//! # Domain Models
+//!
+//!   Shared data types for parsed vCard contacts, PostgreSQL rows, digest payloads,
+//!   and weekly travel snapshots.
+//!
+//! INPUT:
+//!   - VCF-derived fields, SQL query rows, and serde JSON for travel cache files.
+//!
+//! OUTPUT:
+//!   - `Contact`, `Task`, `Reconnect`, row types (`TaskRow`, `ReconnectRow`), and travel structs.
+//!
+//! NOTES:
+//!   - `Contact` is the in-memory source of truth before DB upsert; travel types serialize to cache JSON.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use crate::geo::GeoPoint;
 use chrono::{NaiveDate, DateTime, Utc};
 use serde::{Deserialize, Serialize};

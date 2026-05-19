@@ -1,3 +1,20 @@
+<!--
+# Assets — Shared Media Index
+
+  Describes brand PNG layout and which Pepper surfaces use which avatar.
+
+INPUT:
+  - Static files under assets/brand/
+
+OUTPUT:
+  - Usage table for web vs. email
+
+NOTES:
+  - Do not duplicate brand files into pepper-web/static/
+
+Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+-->
+
 # Assets
 
 Shared media for Pepper — not tied to a single binary. Web, email, and future clients all reference files here.

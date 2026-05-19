@@ -1,3 +1,20 @@
+//! # Generate Test Contacts
+//!
+//!   Integration test (ignored by default) that writes 20 synthetic VCF files to `../contacts/`
+//!   covering TODO, Reconnect, city triggers, CRM logs, and incomplete records.
+//!
+//! INPUT:
+//!   - None (uses `fake` crate for random names, emails, addresses).
+//!
+//! OUTPUT:
+//!   - `contact_01.vcf` … `contact_20.vcf` under the repo `contacts/` directory.
+//!
+//! NOTES:
+//!   - Run manually: `cargo test -p pepper-crm generate_test_contacts -- --ignored --nocapture`
+//!   - Overwrites numbered fixture files; scenarios are documented inline in the test body.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use chrono::{Duration, Local};
 use fake::faker::address::en::{CityName, CountryName, StateAbbr, ZipCode};
 use fake::faker::company::en::CompanyName;

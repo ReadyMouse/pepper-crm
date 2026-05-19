@@ -1,3 +1,27 @@
+//! # MCP Travel Match Server
+//!
+//!   MCP server (stdio) that builds and retrieves weekly travel snapshots: upcoming trips
+//!   matched to nearby contacts via geocoding (VCF + Google Calendar ICS).
+//!
+//! INPUT:
+//!   - Env: `GOOGLE_CALENDAR_ICS_URL`, `CONTACTS_DIR` (default `./contacts`),
+//!     `CACHE_DIR` (default `.cache`), optional `METRO_RADIUS_KM` / `METRO_RADIUS_MI`,
+//!     `GEO_WRITE_TO_VCF`, `NOMINATIM_USER_AGENT`, `GEOCODE_CACHE_TTL_DAYS`
+//!   - MCP tool `build_travel_week`: `{ "force"?: bool }` — rebuild even if cached
+//!   - MCP tool `get_travel_week`: `{ "week_id"?: "<id>" }` — omit for current next-week snapshot
+//!
+//! OUTPUT:
+//!   - `build_travel_week` → `TravelWeekSnapshot` (week_id, week_start, week_end, built_at,
+//!     metro_radius_km, trips[{ title, start, end, matches[{ uid, full_name, city,
+//!     distance_km, reason, reconnect_tag }] }])
+//!   - `get_travel_week` → `TravelWeekSnapshot` or `null` if not cached
+//!
+//! NOTES:
+//!   - Server name: `mcp-travel-server`
+//!   - Pepper orchestrator calls pepper-crm travel helpers directly instead of this server
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use anyhow::Result;
 use chrono::Local;
 use pepper_crm::{

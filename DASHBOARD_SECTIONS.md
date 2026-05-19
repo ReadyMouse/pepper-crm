@@ -1,3 +1,20 @@
+<!--
+# Pepper — Dashboard Feature Spec
+
+  Product spec for dashboard and digest sections; not web implementation detail.
+
+INPUT:
+  - pepper-crm data sources (VCF tags, calendar, geo)
+
+OUTPUT:
+  - Feature definitions, display order, implementation priority
+
+NOTES:
+  - Sections marked Coming Soon in spec may now be live; see IMPLEMENTATION_STATUS.md.
+
+Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+-->
+
 # Pepper — Dashboard Feature Spec
 
 Product feature spec for what Pepper surfaces on the dashboard and in the weekly digest. This is a **design document**, not web implementation detail.

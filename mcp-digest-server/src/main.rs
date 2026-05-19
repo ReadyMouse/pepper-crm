@@ -1,3 +1,24 @@
+//! # MCP Digest Server
+//!
+//!   MCP server (stdio) that renders an HTML email digest from pending tasks and
+//!   due reconnects using Tera templates.
+//!
+//! INPUT:
+//!   - MCP tool `render_digest`: `{ "tasks": [TaskItem], "reconnects": [ReconnectItem] }`
+//!     — TaskItem: contact_name, description
+//!     — ReconnectItem: contact_name, due_date, tag
+//!
+//! OUTPUT:
+//!   - `render_digest` → `{ "html": "<html...>", "subject": "<subject line>" }`
+//!     — subject is `"Pepper CRM: No items this week"` when both lists are empty,
+//!       otherwise `"Pepper CRM: N task(s), M reconnect(s)"`
+//!
+//! NOTES:
+//!   - Server name: `mcp-digest-server`
+//!   - Template: `templates/digest.html`; injects date, counts, tasks, reconnects
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use anyhow::Result;
 use chrono::Local;
 use rmcp::*;

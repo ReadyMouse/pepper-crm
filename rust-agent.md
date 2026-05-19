@@ -3,6 +3,23 @@ description: 'Rust programming language coding conventions and best practices'
 applyTo: '**/*.rs'
 ---
 
+<!--
+# Rust Coding Conventions — Cursor Agent Rules
+
+  Cursor applyTo rules for idiomatic Rust in this workspace.
+
+INPUT:
+  - Rust source files (**/*.rs)
+
+OUTPUT:
+  - Conventions for naming, errors, async, testing
+
+NOTES:
+  - Based on The Rust Book and API Guidelines; not Pepper-specific business logic.
+
+Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+-->
+
 # Rust Coding Conventions and Best Practices
 
 Follow idiomatic Rust practices and community standards when writing Rust code. 

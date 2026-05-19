@@ -1,3 +1,20 @@
+//! # vCard Parser and Writer
+//!
+//!   Reads and writes Apple/Google-style VCF files: parse contacts, unfold folded lines,
+//!   and write back GEO, NOTE, REV, and CATEGORIES for CRM interactions.
+//!
+//! INPUT:
+//!   - VCF file paths or raw vCard strings; `Contact` values for write-back operations.
+//!
+//! OUTPUT:
+//!   - `Contact` structs; updated VCF files on disk (`GEO`, `NOTE`, reconnect snooze).
+//!
+//! NOTES:
+//!   - `log_interaction` uses local `fs::write`; CardDAV PUT is planned (see TODO in code).
+//!   - Synthesizes UIDs when exports omit `UID:`.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use crate::geo::GeoPoint;
 use crate::models::Contact;
 use crate::tags::{

@@ -1,3 +1,19 @@
+# MCP Travel Match Server Package
+#
+#   Cargo manifest for the MCP server that builds and loads weekly travel/contact match snapshots.
+#
+# INPUT:
+#   - N/A (package metadata and dependency declarations)
+#
+# OUTPUT:
+#   - `mcp-travel-server` binary exposing `build_travel_week` and `get_travel_week` MCP tools
+#
+# NOTES:
+#   - Uses pepper-crm travel/geocode pipeline; reads env for calendar URL, cache, contacts dir
+#   - Snapshots cached under CACHE_DIR (default `.cache`)
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 [package]
 name = "mcp-travel-server"
 version = "0.1.0"

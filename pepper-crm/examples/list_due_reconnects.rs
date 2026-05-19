@@ -1,4 +1,20 @@
-//! List contacts due for reconnect in the next N days (same logic as the dashboard).
+//! # List Due Reconnects Example
+//!
+//!   CLI example that prints contacts whose Reconnect interval is due within a configurable window,
+//!   using the same logic as the dashboard digest.
+//!
+//! INPUT:
+//!   - `CONTACTS_DIR` (default `./contacts`); optional `RECONNECT_WINDOW_DAYS` (default 7).
+//!
+//! OUTPUT:
+//!   - Stdout list of contact name, due date, and Reconnect tag.
+//!
+//! NOTES:
+//!   - Run: `cargo run -p pepper-crm --example list_due_reconnects`
+//!   - Excludes Never, city triggers, venues, and contacts without a recent interaction anchor.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use chrono::Local;
 use pepper_crm::{due_reconnects_from_contacts, parse_vcards_from_dir};
 

@@ -1,4 +1,19 @@
-//! Build weekly travel match lists from calendar + VCF contacts.
+//! # Weekly Travel Snapshot Builder
+//!
+//!   Combines next-week calendar trips with geocoded VCF contacts to produce ranked match lists
+//!   (proximity and "before … trip" tags), then caches the result as JSON.
+//!
+//! INPUT:
+//!   - `TravelBuildConfig` (contacts dir, ICS URL/content, cache root, metro radius, `as_of`).
+//!
+//! OUTPUT:
+//!   - `TravelWeekSnapshot` saved under `.cache/travel/{week_id}.json`.
+//!
+//! NOTES:
+//!   - Returns cached snapshot unless `force` is set; requires recent interaction anchor on contacts.
+//!   - `build_travel_week_snapshot_with_geocoder` is for tests with injected `FixedGeocoder`.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use crate::calendar::{fetch_ics, trips_for_next_week};
 use crate::contact_geo::{ensure_contacts_geocoded, ensure_contacts_geocoded_sync, needs_geocoding};

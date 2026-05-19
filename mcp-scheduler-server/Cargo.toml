@@ -1,3 +1,19 @@
+# MCP Scheduler Server Package
+#
+#   Cargo manifest for the MCP server that syncs contacts/tasks/reconnects to Postgres.
+#
+# INPUT:
+#   - N/A (package metadata and dependency declarations)
+#
+# OUTPUT:
+#   - `mcp-scheduler-server` binary exposing `upsert_contacts` and `get_due` MCP tools
+#
+# NOTES:
+#   - Requires `DATABASE_URL` at runtime (loaded from `.env` via dotenvy)
+#   - Uses pepper-crm DB helpers and sqlx
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 [package]
 name = "mcp-scheduler-server"
 version = "0.1.0"

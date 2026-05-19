@@ -1,3 +1,19 @@
+# MCP vCard Server Package
+#
+#   Cargo manifest for the MCP server that parses and updates contact VCF files.
+#
+# INPUT:
+#   - N/A (package metadata and dependency declarations)
+#
+# OUTPUT:
+#   - `mcp-vcard-server` binary exposing `parse_vcards` and `log_interaction` MCP tools
+#
+# NOTES:
+#   - Uses pepper-crm for VCF parsing and append-only interaction logging
+#   - Communicates over stdio via rmcp
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 [package]
 name = "mcp-vcard-server"
 version = "0.1.0"

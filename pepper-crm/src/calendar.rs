@@ -1,4 +1,19 @@
-//! Parse travel events from iCalendar (ICS) feeds.
+//! # Calendar ICS Parsing
+//!
+//!   Fetches and parses iCalendar feeds to find travel trips overlapping the week after `as_of`.
+//!   Event SUMMARY is treated as the destination name.
+//!
+//! INPUT:
+//!   - ICS URL or raw ICS text; `as_of` calendar date for next-week window math.
+//!
+//! OUTPUT:
+//!   - `TravelTrip` list, `IcsEvent` structs, and `(week_start, week_end)` range helpers.
+//!
+//! NOTES:
+//!   - Google all-day `DTEND` is exclusive; parser normalizes to inclusive end dates.
+//!   - `fetch_ics` requires network access to the calendar secret URL.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use crate::models::TravelTrip;
 use anyhow::{Context, Result};

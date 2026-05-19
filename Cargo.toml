@@ -1,3 +1,14 @@
+# Pepper CRM Workspace Manifest
+#
+#   Defines the Rust workspace members (core library, MCP servers, runner, web dashboard)
+#   and shared dependency versions used across all crates.
+#
+# INPUT: None (Cargo manifest).
+# OUTPUT: Workspace layout and pinned dependency versions for `cargo build` / `cargo run`.
+# NOTES: Members include pepper-crm, pepper (orchestrator), pepper-web, and MCP server crates.
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 [workspace]
 members = [
     "pepper-crm",

@@ -1,4 +1,19 @@
-//! Ensure contacts have up-to-date GEO on vCards (geocode only when missing or stale).
+//! # Contact GEO Ensure Pass
+//!
+//!   Geocodes contacts whose vCards lack GEO or have stale `X-PEPPER-GEO-SOURCE` relative to ADR,
+//!   optionally writing coordinates back to VCF files before travel matching.
+//!
+//! INPUT:
+//!   - Mutable `Contact` slice; `Geocoder` (Nominatim async or sync test geocoder); `write_back` flag.
+//!
+//! OUTPUT:
+//!   - `GeocodeEnsureStats` (skipped, already_ok, geocoded, failed); updated in-memory `Contact.geo`.
+//!
+//! NOTES:
+//!   - Legacy GEO without source line triggers a one-time refresh to stamp `X-PEPPER-GEO-SOURCE`.
+//!   - Write-back failures are logged but do not abort the batch.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use crate::geo::{normalize_geocode_query, GeoPoint, Geocoder, NominatimGeocoder};
 use crate::models::Contact;

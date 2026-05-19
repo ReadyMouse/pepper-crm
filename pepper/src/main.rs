@@ -1,3 +1,34 @@
+//! # Pepper CRM Orchestrator
+//!
+//!   CLI entry point that spawns MCP servers over stdio and runs the weekly digest
+//!   pipeline: parse contacts, sync to Postgres, fetch due items, render HTML, export
+//!   .ics attachments, and send email (or dry-run). Optionally builds a travel match
+//!   snapshot via the pepper-crm library when GOOGLE_CALENDAR_ICS_URL is set.
+//!
+//! INPUT:
+//!   - CLI: `--contacts-dir` (default `./contacts`), `--dry-run`, `--recipient`, `--force-travel`
+//!   - Env: `DIGEST_RECIPIENT`, `CACHE_DIR`, `GOOGLE_CALENDAR_ICS_URL` (travel step)
+//!   - MCP tool calls (in order):
+//!     - `parse_vcards` — `{ "directory": "<contacts_dir>" }`
+//!     - `upsert_contacts` — `{ "contacts": [<ContactSummary>, ...] }`
+//!     - `get_due` — `{}`
+//!     - `render_digest` — `{ "tasks": [...], "reconnects": [...] }`
+//!     - `export_ics` — `{ "reconnects": [...] }`
+//!     - `send_email` — `{ "to", "subject", "html_body", "attachments" }` (skipped in dry-run)
+//!
+//! OUTPUT:
+//!   - Logs pipeline progress; exits 0 on success
+//!   - Dry-run: prints recipient, subject, body length, attachment count (no email sent)
+//!   - `send_email` result string when email is sent
+//!   - Travel snapshot written to cache (Step 7) when needed and calendar URL is configured
+//!
+//! NOTES:
+//!   - Spawns `./target/debug/mcp-{vcard,scheduler,digest,cal,mailer}-server` binaries
+//!   - Does not spawn mcp-calendar-server or mcp-travel-server; travel uses pepper-crm directly
+//!   - Travel step runs once per week unless `--force-travel` or no cached snapshot exists
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use anyhow::{Context, Result};
 use chrono::Local;
 use clap::Parser;

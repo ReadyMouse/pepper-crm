@@ -1,3 +1,22 @@
+//! # MCP Mailer Server
+//!
+//!   MCP server (stdio) that sends HTML emails with optional file attachments via SMTP.
+//!
+//! INPUT:
+//!   - Env: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`
+//!   - MCP tool `send_email`: `{ "to", "subject", "html_body", "attachments": [...] }`
+//!     — each attachment: filename, content, content_type (e.g. `"text/calendar"`)
+//!
+//! OUTPUT:
+//!   - `send_email` → confirmation string (e.g. `"Email sent to <recipient>"`)
+//!
+//! NOTES:
+//!   - Server name: `mcp-mailer-server`
+//!   - Builds multipart/mixed message: HTML body plus zero or more attachments
+//!   - Loads `.env` via dotenvy on startup
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
 use anyhow::Result;
 use lettre::{
     message::{header::ContentType, Attachment, MultiPart, SinglePart},
