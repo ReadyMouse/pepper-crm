@@ -5,7 +5,6 @@ A localhost web UI for visualizing and testing your Pepper CRM data.
 ## Quick Start
 
 ```bash
-# Make sure database is running and .env is configured
 cargo run --bin pepper-web
 ```
 
@@ -13,30 +12,19 @@ Then open: **http://localhost:3000**
 
 ## Pages
 
-- **Dashboard** (`/`) - Overview of pending tasks and due reconnects
-- **Contacts** (`/contacts`) - Grid view of all contacts in the database
-- **Digest Preview** (`/preview`) - Preview what the weekly email will look like
+- **Dashboard** (`/`) — Product layout (sections marked Coming Soon)
+- **Digest Preview** (`/preview`) — Live preview of the weekly email
 
-## Features
+## Static files
 
-- 🎨 Same styling as the email digest
-- 📊 Real-time data from PostgreSQL
-- 🔄 Refresh to see latest data
-- 📱 Responsive design
+| Path | Source |
+|------|--------|
+| `/static/theme.css` | `pepper-web/static/` (web-only styles) |
+| `/assets/brand/*` | `assets/brand/` (shared avatars — see `assets/README.md`) |
 
-## Workflow
-
-1. **Parse VCF files** - Run `pepper --dry-run` to sync contacts to DB
-2. **View in browser** - Open http://localhost:3000 to see the data
-3. **Test digest** - Go to `/preview` to see what the email will contain
-4. **Send for real** - Run `pepper` (without --dry-run) to send the actual email
+The header uses `pepper_avatar_teal.png`. The white avatar is for the email digest in `templates/`, not the web app.
 
 ## Development
 
-The web server uses:
-- **Axum** - Fast web framework
-- **Tera** - Template engine (same as email digest)
-- **SQLx** - Direct database queries
-- **pepper-crm** - Shared business logic library
-
-All data comes from the same PostgreSQL database that the MCP servers use.
+- **Axum** + **Tera** + **SQLx** + **pepper-crm**
+- Brand images: edit under `assets/brand/` at the repo root — do not duplicate into `pepper-web/static/`

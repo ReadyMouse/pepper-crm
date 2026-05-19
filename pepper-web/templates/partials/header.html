@@ -1,0 +1,12 @@
+<header class="site-header">
+    <div class="header-inner">
+        <div class="header-brand">
+            <h1>Pepper CRM</h1>
+        </div>
+        <nav class="site-nav">
+            <a href="/"{% if nav_active == "dashboard" %} class="active"{% endif %}>Dashboard</a>
+            <a href="/preview"{% if nav_active == "preview" %} class="active"{% endif %}>Digest Preview</a>
+        </nav>
+        <img src="/assets/brand/pepper_avatar_teal.png" alt="Pepper" class="header-avatar" width="88" height="88">
+    </div>
+</header>

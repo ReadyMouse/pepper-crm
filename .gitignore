@@ -20,6 +20,8 @@
 
 # Test/temporary data
 /contacts/*.vcf
+# My real contacts
+contacts.vcf
 
 # IDE
 .vscode/
@@ -46,6 +48,15 @@ Desktop.ini
 # Logs
 *.log
 
+# Travel / geocode caches (weekly snapshots, not committed)
+.cache/
+
 # Backup files
 *.bak
 *.backup
+
+# Agents
+documentation_agent.md
+documentation_subagent.md
+
+

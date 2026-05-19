@@ -1,10 +1,13 @@
 use anyhow::{Context, Result};
+use chrono::Local;
 use clap::Parser;
+use pepper_crm::{build_travel_week_snapshot, load_current_snapshot, TravelBuildConfig};
 use rmcp::*;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{error, info};
+use tracing::{info, warn};
 
 #[derive(Parser, Debug)]
 #[command(name = "pepper")]
@@ -21,6 +24,10 @@ struct Args {
     /// Email recipient (overrides DIGEST_RECIPIENT env var)
     #[arg(short, long)]
     recipient: Option<String>,
+
+    /// Rebuild the travel match snapshot even if one exists for next week
+    #[arg(long)]
+    force_travel: bool,
 }
 
 async fn spawn_server(name: &str, binary: &str) -> Result<Client> {
@@ -139,7 +146,36 @@ async fn main() -> Result<()> {
         info!("Email sent: {}", send_result);
     }
     
+    // Step 7: Weekly travel snapshot (once per week unless --force-travel)
+    let as_of = Local::now().date_naive();
+    let cache_root = std::env::var("CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(".cache"));
+    let needs_travel = args.force_travel
+        || load_current_snapshot(&cache_root, as_of)?.is_none();
+
+    if needs_travel {
+        if std::env::var("GOOGLE_CALENDAR_ICS_URL").is_ok() {
+            info!("Step 7: Building travel match snapshot...");
+            let mut config = TravelBuildConfig::from_env(as_of);
+            config.contacts_dir = PathBuf::from(&args.contacts_dir);
+            config.force = args.force_travel;
+            match build_travel_week_snapshot(&config).await {
+                Ok(snap) => info!(
+                    "Travel snapshot: {} trip(s), {} match(es)",
+                    snap.trips.len(),
+                    snap.match_count()
+                ),
+                Err(e) => warn!("Travel snapshot build failed: {}", e),
+            }
+        } else {
+            info!("Step 7: Skipping travel build (GOOGLE_CALENDAR_ICS_URL not set)");
+        }
+    } else {
+        info!("Step 7: Travel snapshot already exists for next week (use --force-travel to rebuild)");
+    }
+
     info!("🌶️  Pepper CRM completed successfully!");
-    
+
     Ok(())
 }

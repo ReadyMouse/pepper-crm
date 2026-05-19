@@ -51,6 +51,8 @@ pepper/
 ├── mcp-cal-server/         # iCalendar export MCP server
 ├── mcp-mailer-server/      # SMTP email MCP server
 ├── pepper/                 # CLI orchestrator
+├── assets/                 # Shared media (brand avatars, etc.)
+│   └── brand/              # pepper_avatar_teal.png, pepper_avatar_white.png
 ├── pepper-web/             # Web dashboard (localhost:3000)
 ├── templates/              # Email templates
 └── migrations/
@@ -130,11 +132,10 @@ cargo run --bin pepper-web
 Then open: **http://localhost:3000**
 
 ### Pages
-- **Dashboard** (`/`) - Overview of pending tasks and due reconnects
-- **Contacts** (`/contacts`) - All contacts in your database  
-- **Digest Preview** (`/preview`) - See what the weekly email will look like
+- **Dashboard** (`/`) — Layout blueprint with all product sections (Coming Soon)
+- **Digest Preview** (`/preview`) — Live preview of the weekly email digest
 
-The web UI uses the same data and templates as the email digest, making it perfect for testing before sending emails.
+Feature specs: [`DASHBOARD_SECTIONS.md`](DASHBOARD_SECTIONS.md)
 
 ## Test Contacts
 
@@ -164,16 +165,18 @@ The `contacts/` directory contains 20 generated test contacts covering various s
 Tags are written one per line in the `NOTE` field:
 
 ```
-NOTE: Met at conference. Works on crypto.
+July 2026: Met at conference. Works on crypto.
+
 TODO: send intro email
 TODO: share grant template
-Reconnect: 3 months
+
 ```
+
+"Reconnect: 3 months" is a tag that can be added. 
 
 Supported tags:
 - `TODO: [description]` - Create a task
 - `Reconnect: N days/weeks/months` - Schedule timed follow-up
-- `Reconnect: before [city] trip` - Deferred reminder (not scheduled yet)
 
 ## License
 

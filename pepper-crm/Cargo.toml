@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 # Workspace dependencies
 sqlx = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
@@ -20,8 +20,18 @@ icalendar = "0.16"     # .ics generation
 tera = "1"             # email templating
 lettre = "0.11"        # SMTP sending
 regex = "1"            # tag parsing
+reqwest = { workspace = true }
+dotenvy = { workspace = true }
+
+[[example]]
+name = "test_calendar"
+path = "examples/test_calendar.rs"
+
+[[example]]
+name = "parse_contacts"
+path = "examples/parse_contacts.rs"
 
 [dev-dependencies]
 fake = { version = "2", features = ["derive", "chrono"] }
 rand = "0.8"
-tempfile = "3"
+tempfile = { workspace = true }

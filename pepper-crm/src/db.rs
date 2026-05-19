@@ -1,5 +1,7 @@
 use crate::models::*;
-use crate::tags::{tag_to_due_date, is_city_trigger};
+use crate::tags::{
+    is_city_trigger, is_reconnect_never, reconnect_due_date, resolve_reconnect_tag,
+};
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use sqlx::PgPool;
@@ -194,13 +196,21 @@ pub async fn upsert_contacts_batch(pool: &PgPool, contacts: &[Contact]) -> Resul
             tasks_created += 1;
         }
         
-        // Upsert reconnect
-        if let Some(tag) = &contact.reconnect_tag {
-            if is_city_trigger(tag) {
-                upsert_deferred_reconnect(pool, contact_id, tag).await?;
+        // Upsert reconnect (anchor from REV or latest Month YYYY note)
+        if let Some(tag) = resolve_reconnect_tag(&contact.categories, &contact.note_raw) {
+            if is_reconnect_never(&contact.categories, Some(&tag)) {
+                // no row
+            } else if is_city_trigger(&tag) {
+                upsert_deferred_reconnect(pool, contact_id, &tag).await?;
                 reconnects_created += 1;
-            } else if let Some(due_date) = tag_to_due_date(tag, chrono::Local::now().date_naive()) {
-                upsert_reconnect(pool, contact_id, due_date, tag).await?;
+            } else if let Some(due_date) = reconnect_due_date(
+                &contact.categories,
+                &contact.note_raw,
+                Some(&tag),
+                contact.rev,
+                chrono::Local::now().date_naive(),
+            ) {
+                upsert_reconnect(pool, contact_id, due_date, &tag).await?;
                 reconnects_created += 1;
             }
         }

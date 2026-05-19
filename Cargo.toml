@@ -6,6 +6,8 @@ members = [
     "mcp-digest-server",
     "mcp-cal-server",
     "mcp-mailer-server",
+    "mcp-calendar-server",
+    "mcp-travel-server",
     "pepper",  # The runner/orchestrator binary
     "pepper-web",  # Web dashboard
 ]
@@ -30,3 +32,5 @@ icalendar   = "0.16"
 regex       = "1"
 axum        = "0.7"
 tower-http  = { version = "0.5", features = ["fs", "trace"] }
+reqwest     = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tempfile    = "3"
