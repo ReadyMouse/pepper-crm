@@ -1,0 +1,22 @@
+[package]
+name = "mcp-mailer-server"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mcp-mailer-server"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+rmcp = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenvy = { workspace = true }
+
+# Mailer-specific
+lettre = { workspace = true }

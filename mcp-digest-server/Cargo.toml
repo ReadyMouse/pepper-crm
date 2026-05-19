@@ -1,0 +1,22 @@
+[package]
+name = "mcp-digest-server"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mcp-digest-server"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+rmcp = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Digest-specific
+tera = { workspace = true }

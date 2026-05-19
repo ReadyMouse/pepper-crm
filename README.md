@@ -45,6 +45,14 @@ pepper/
 │   │   └── ical.rs        # .ics generation
 │   └── tests/
 │       └── generate_test_contacts.rs
+├── mcp-vcard-server/       # VCF read/write MCP server
+├── mcp-scheduler-server/   # Database sync MCP server
+├── mcp-digest-server/      # Email rendering MCP server
+├── mcp-cal-server/         # iCalendar export MCP server
+├── mcp-mailer-server/      # SMTP email MCP server
+├── pepper/                 # CLI orchestrator
+├── pepper-web/             # Web dashboard (localhost:3000)
+├── templates/              # Email templates
 └── migrations/
     └── 001_initial.sql    # PostgreSQL schema
 ```
@@ -110,6 +118,23 @@ cargo test -p pepper-crm
 # Regenerate test contacts (if needed)
 cargo test -p pepper-crm --test generate_test_contacts -- --ignored
 ```
+
+## Web Dashboard 🌶️
+
+For testing and visualization, run the web dashboard:
+
+```bash
+cargo run --bin pepper-web
+```
+
+Then open: **http://localhost:3000**
+
+### Pages
+- **Dashboard** (`/`) - Overview of pending tasks and due reconnects
+- **Contacts** (`/contacts`) - All contacts in your database  
+- **Digest Preview** (`/preview`) - See what the weekly email will look like
+
+The web UI uses the same data and templates as the email digest, making it perfect for testing before sending emails.
 
 ## Test Contacts
 
