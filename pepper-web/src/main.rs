@@ -3,7 +3,7 @@
 //!   Axum HTTP server for visualizing Pepper CRM data: tasks, reconnects, and travel matches.
 //!
 //! INPUT: DATABASE_URL, CONTACTS_DIR, CACHE_DIR, GOOGLE_CALENDAR_ICS_URL (optional); VCF files; PostgreSQL.
-//! OUTPUT: Routes `/` (dashboard), `/preview` (digest preview), `/travel/refresh`, `/travel/snooze`; static assets.
+//! OUTPUT: Routes `/`, `/preview`, `/travel/refresh`, `/travel/snooze`, `/random/shuffle`; static assets.
 //! NOTES: Syncs VCF → PostgreSQL on startup; travel snapshot built on demand, not every page load.
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
@@ -19,15 +19,22 @@ use axum::{
 use serde::Deserialize;
 use chrono::Local;
 use pepper_crm::{
-    build_travel_week_snapshot, due_reconnects_from_contacts, find_contact_by_uid, get_due_tasks,
+    build_travel_week_snapshot, due_reconnects_from_contacts, fetch_ics, find_contact_by_uid,
+    get_due_tasks,
+    is_do_not_engage, trips_for_next_week, upcoming_birthdays_from_contacts, BIRTHDAY_WINDOW_DAYS,
     km_to_miles, load_current_snapshot, miles_to_km, parse_vcards_from_dir,
-    remove_contact_from_current_snapshot, set_reconnect_snooze, upsert_contacts_batch, DueReconnectInfo,
-    MatchReason, TravelBuildConfig, TravelWeekSnapshot, DEFAULT_METRO_RADIUS_MI,
-    RECONNECT_SNOOZE_OPTIONS,
+    resolve_random_picks, shuffle_and_save, remove_contact_from_current_snapshot,
+    set_random_pick_category,
+    upsert_contacts_batch, DueReconnectInfo, MatchReason, RandomPickInfo, RandomPickWeek,
+    RANDOM_PICK_COUNT, TravelBuildConfig, TravelWeekSnapshot, DEFAULT_METRO_RADIUS_MI,
+    DO_NOT_ENGAGE_CATEGORY, RECONNECT_SNOOZE_OPTIONS,
 };
 use serde::Serialize;
 use sqlx::PgPool;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 use tera::{Context as TeraContext, Tera};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::info;
@@ -40,6 +47,8 @@ struct AppState {
     tera: Tera,
     cache_root: PathBuf,
     contacts_dir: PathBuf,
+    /// Parsed VCF contacts (reloaded after sync/snooze). Avoids re-parsing on each request.
+    contacts: Arc<RwLock<Arc<Vec<pepper_crm::Contact>>>>,
 }
 
 #[derive(Serialize)]
@@ -66,9 +75,32 @@ struct TravelMatchView {
 }
 
 #[derive(Serialize)]
+struct RandomPickView {
+    uid: String,
+    full_name: String,
+    org: String,
+    email: String,
+    phone: String,
+    location: String,
+    reconnect_tag: String,
+    categories: String,
+    note: String,
+    linkedin_url: String,
+}
+
+#[derive(Serialize)]
 struct ReconnectSnoozeOption {
     value: String,
     label: String,
+}
+
+#[derive(Serialize)]
+struct BirthdayView {
+    uid: String,
+    contact_name: String,
+    date_label: String,
+    when_label: String,
+    age_label: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,10 +108,13 @@ struct DashboardQuery {
     refreshed: Option<String>,
     travel_error: Option<String>,
     snoozed: Option<String>,
+    random_shuffled: Option<String>,
+    random_category_saved: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct TravelRefreshForm {
+    search_location: String,
     #[serde(default = "default_form_metro_radius_mi")]
     metro_radius_mi: u32,
 }
@@ -129,6 +164,115 @@ fn task_views(tasks: Vec<pepper_crm::TaskRow>) -> Vec<TaskView> {
         .map(|t| TaskView {
             contact_name: t.full_name,
             description: t.body,
+        })
+        .collect()
+}
+
+fn format_location(city: Option<&str>, state: Option<&str>) -> String {
+    match (city.filter(|s| !s.is_empty()), state.filter(|s| !s.is_empty())) {
+        (Some(c), Some(s)) => format!("{c}, {s}"),
+        (Some(c), None) => c.to_string(),
+        (None, Some(s)) => s.to_string(),
+        (None, None) => String::new(),
+    }
+}
+
+fn random_pick_views(picks: Vec<RandomPickInfo>) -> Vec<RandomPickView> {
+    picks
+        .into_iter()
+        .map(|p| RandomPickView {
+            uid: p.uid,
+            full_name: p.full_name,
+            org: p.org.unwrap_or_default(),
+            email: p.email.unwrap_or_default(),
+            phone: p.phone.unwrap_or_default(),
+            location: format_location(p.city.as_deref(), p.state.as_deref()),
+            reconnect_tag: p.reconnect_tag.unwrap_or_default(),
+            categories: p.categories.join(", "),
+            note: p.note,
+            linkedin_url: p.linkedin_url.unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn reconnect_snooze_option_views() -> Vec<ReconnectSnoozeOption> {
+    RECONNECT_SNOOZE_OPTIONS
+        .iter()
+        .map(|v| ReconnectSnoozeOption {
+            value: (*v).to_string(),
+            label: if *v == DO_NOT_ENGAGE_CATEGORY {
+                DO_NOT_ENGAGE_CATEGORY.to_string()
+            } else {
+                format!("Reconnect: {v}")
+            },
+        })
+        .collect()
+}
+
+fn random_pick_category_options() -> Vec<ReconnectSnoozeOption> {
+    reconnect_snooze_option_views()
+}
+
+fn contacts_snapshot(state: &AppState) -> Arc<Vec<pepper_crm::Contact>> {
+    state.contacts.read().expect("contacts lock poisoned").clone()
+}
+
+/// Parse VCF on a blocking thread — large exports overflow the default tokio worker stack.
+async fn parse_contacts_blocking(contacts_dir: PathBuf) -> Result<Arc<Vec<pepper_crm::Contact>>> {
+    tokio::task::spawn_blocking(move || {
+        if !contacts_dir.exists() {
+            return Ok(Arc::new(Vec::new()));
+        }
+        let contacts = parse_vcards_from_dir(&contacts_dir).with_context(|| {
+            format!("Failed to parse VCF files in {}", contacts_dir.display())
+        })?;
+        Ok(Arc::new(contacts))
+    })
+    .await
+    .context("contacts parse task failed")?
+}
+
+fn fetch_random_picks(contacts: &Arc<Vec<pepper_crm::Contact>>, cache_root: &PathBuf) -> Result<RandomPickWeek> {
+    let as_of = Local::now().date_naive();
+    resolve_random_picks(contacts, cache_root, as_of, RANDOM_PICK_COUNT)
+}
+
+async fn reload_contacts_cache(state: &AppState) -> Result<()> {
+    let contacts = parse_contacts_blocking(state.contacts_dir.clone()).await?;
+    if !contacts.is_empty() {
+        let result = upsert_contacts_batch(&state.pool, contacts.as_ref()).await?;
+        info!(
+            "Reloaded {} contacts ({} tasks, {} reconnects)",
+            result.contacts_upserted, result.tasks_created, result.reconnects_created
+        );
+    }
+    *state.contacts.write().expect("contacts lock poisoned") = contacts;
+    Ok(())
+}
+
+fn birthday_views(
+    birthdays: Vec<pepper_crm::UpcomingBirthdayInfo>,
+) -> Vec<BirthdayView> {
+    birthdays
+        .into_iter()
+        .map(|b| {
+            let date_label = b.occurrence.format("%b %-d").to_string();
+            let when_label = match b.days_until {
+                0 => "Today".to_string(),
+                1 => "Tomorrow".to_string(),
+                n => format!("In {n} days"),
+            };
+            let age_label = b
+                .turning_age
+                .map(|a| format!("Turning {a}"))
+                .unwrap_or_default();
+            BirthdayView {
+                uid: b.uid,
+                contact_name: b.full_name,
+                date_label,
+                when_label,
+                age_label,
+            }
         })
         .collect()
 }
@@ -199,24 +343,26 @@ fn snapshot_to_views(snapshot: &TravelWeekSnapshot) -> (Vec<TravelTripView>, usi
     (trips, total)
 }
 
-async fn sync_contacts_from_vcf(pool: &PgPool, contacts_dir: &PathBuf) -> Result<()> {
+async fn sync_contacts_from_vcf(
+    pool: &PgPool,
+    contacts_dir: &PathBuf,
+) -> Result<Arc<Vec<pepper_crm::Contact>>> {
     if !contacts_dir.exists() {
         info!(
             "Contacts directory {} not found, skipping VCF sync",
             contacts_dir.display()
         );
-        return Ok(());
+        return Ok(Arc::new(Vec::new()));
     }
 
-    let contacts = parse_vcards_from_dir(contacts_dir)
-        .with_context(|| format!("Failed to parse VCF files in {}", contacts_dir.display()))?;
+    let contacts = parse_contacts_blocking(contacts_dir.clone()).await?;
 
     if contacts.is_empty() {
         info!("No VCF contacts found in {}", contacts_dir.display());
-        return Ok(());
+        return Ok(contacts);
     }
 
-    let result = upsert_contacts_batch(pool, &contacts).await?;
+    let result = upsert_contacts_batch(pool, contacts.as_ref()).await?;
     info!(
         "Synced {} contacts ({} tasks, {} reconnects) from {}",
         result.contacts_upserted,
@@ -225,28 +371,29 @@ async fn sync_contacts_from_vcf(pool: &PgPool, contacts_dir: &PathBuf) -> Result
         contacts_dir.display()
     );
 
-    Ok(())
+    Ok(contacts)
 }
 
 async fn fetch_due(
     pool: &PgPool,
-    contacts_dir: &PathBuf,
+    contacts: &Arc<Vec<pepper_crm::Contact>>,
 ) -> Result<(Vec<TaskView>, Vec<ReconnectView>)> {
     let today = Local::now().date_naive();
-    let tasks = get_due_tasks(pool, today).await?;
-
-    let reconnects = if contacts_dir.exists() {
-        let contacts = parse_vcards_from_dir(contacts_dir)
-            .with_context(|| format!("Failed to parse VCF in {}", contacts_dir.display()))?;
-        reconnect_views(due_reconnects_from_contacts(
-            &contacts,
-            today,
-            RECONNECT_WINDOW_DAYS,
-        ))
-    } else {
-        Vec::new()
-    };
-
+    let blocked_uids: std::collections::HashSet<&str> = contacts
+        .iter()
+        .filter(|c| is_do_not_engage(&c.categories))
+        .map(|c| c.uid.as_str())
+        .collect();
+    let tasks = get_due_tasks(pool, today)
+        .await?
+        .into_iter()
+        .filter(|t| !blocked_uids.contains(t.vcard_uid.as_str()))
+        .collect();
+    let reconnects = reconnect_views(due_reconnects_from_contacts(
+        contacts,
+        today,
+        RECONNECT_WINDOW_DAYS,
+    ));
     Ok((task_views(tasks), reconnects))
 }
 
@@ -275,6 +422,15 @@ fn insert_travel_context(context: &mut TeraContext, snapshot: Option<&TravelWeek
             let radius_mi = km_to_miles(snap.metro_radius_km).round() as u32;
             context.insert("metro_radius_mi", &radius_mi);
             context.insert("metro_radius_built", &true);
+            context.insert(
+                "travel_search_near",
+                &snap
+                    .search_location
+                    .as_ref()
+                    .filter(|s| !s.trim().is_empty())
+                    .cloned()
+                    .unwrap_or_default(),
+            );
         }
         None => {
             context.insert("travel_ready", &false);
@@ -282,6 +438,7 @@ fn insert_travel_context(context: &mut TeraContext, snapshot: Option<&TravelWeek
             context.insert("travel_match_count", &0usize);
             context.insert("travel_built_at", &String::new());
             context.insert("travel_week_label", &String::new());
+            context.insert("travel_search_near", &String::new());
             let err = if !has_ics {
                 Some("Set GOOGLE_CALENDAR_ICS_URL in .env, then click Refresh travel matches.".to_string())
             } else {
@@ -295,14 +452,32 @@ fn insert_travel_context(context: &mut TeraContext, snapshot: Option<&TravelWeek
     context.insert("has_calendar_ics", &has_ics);
     context.insert("metro_radius_min", &MIN_METRO_RADIUS_MI);
     context.insert("metro_radius_max", &MAX_METRO_RADIUS_MI);
-    let snooze_options: Vec<ReconnectSnoozeOption> = RECONNECT_SNOOZE_OPTIONS
-        .iter()
-        .map(|v| ReconnectSnoozeOption {
-            label: format!("Reconnect: {v}"),
-            value: (*v).to_string(),
-        })
-        .collect();
+    let snooze_options = reconnect_snooze_option_views();
     context.insert("reconnect_snooze_options", &snooze_options);
+}
+
+async fn default_travel_search_location(
+    as_of: chrono::NaiveDate,
+    snapshot: Option<&TravelWeekSnapshot>,
+) -> String {
+    if let Some(snap) = snapshot {
+        if let Some(loc) = snap.search_location.as_ref().filter(|s| !s.trim().is_empty()) {
+            return loc.clone();
+        }
+        if let Some(trip) = snap.trips.first() {
+            return trip.title.clone();
+        }
+    }
+    if let Ok(url) = std::env::var("GOOGLE_CALENDAR_ICS_URL") {
+        if let Ok(ics) = fetch_ics(&url).await {
+            if let Ok(trips) = trips_for_next_week(&ics, as_of) {
+                if let Some(trip) = trips.first() {
+                    return trip.title.clone();
+                }
+            }
+        }
+    }
+    String::new()
 }
 
 async fn index(
@@ -321,9 +496,22 @@ async fn index(
 async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<String> {
     let as_of = Local::now().date_naive();
     let snapshot = load_current_snapshot(&state.cache_root, as_of)?;
-    let (tasks, reconnects) = fetch_due(&state.pool, &state.contacts_dir).await?;
+    let contacts = contacts_snapshot(&state);
+    let (tasks, reconnects) = fetch_due(&state.pool, &contacts).await?;
+    let birthdays = birthday_views(upcoming_birthdays_from_contacts(
+        &contacts,
+        as_of,
+        BIRTHDAY_WINDOW_DAYS,
+    ));
+    let random_week = fetch_random_picks(&contacts, &state.cache_root)?;
+    let random_picks = random_pick_views(random_week.picks);
+    let random_pick_count = random_picks.len();
+    let random_can_shuffle = random_week.eligible_count >= RANDOM_PICK_COUNT;
+    let random_fewer_than_target = random_pick_count < RANDOM_PICK_COUNT;
     let travel_just_refreshed = query.refreshed.as_deref() == Some("1");
     let reconnect_snoozed = query.snoozed.as_deref() == Some("1");
+    let random_just_shuffled = query.random_shuffled.as_deref() == Some("1");
+    let random_category_saved = query.random_category_saved.as_deref() == Some("1");
 
     let mut context = TeraContext::new();
     context.insert("nav_active", "dashboard");
@@ -334,6 +522,23 @@ async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<St
     context.insert("reconnect_count", &reconnects.len());
     context.insert("reconnect_window_days", &RECONNECT_WINDOW_DAYS);
     context.insert("reconnect_snoozed", &reconnect_snoozed);
+    context.insert("random_picks", &random_picks);
+    context.insert("random_pick_count", &random_pick_count);
+    context.insert("random_week_label", &random_week.week_label);
+    context.insert("random_eligible_count", &random_week.eligible_count);
+    context.insert("random_pick_target", &RANDOM_PICK_COUNT);
+    context.insert("random_can_shuffle", &random_can_shuffle);
+    context.insert("random_fewer_than_target", &random_fewer_than_target);
+    context.insert("random_shuffled", &random_week.shuffled);
+    context.insert("random_just_shuffled", &random_just_shuffled);
+    context.insert("random_category_saved", &random_category_saved);
+    context.insert("random_pick_category_options", &random_pick_category_options());
+    context.insert("birthdays", &birthdays);
+    context.insert("birthday_count", &birthdays.len());
+    context.insert("birthday_window_days", &BIRTHDAY_WINDOW_DAYS);
+    let travel_search_location =
+        default_travel_search_location(as_of, snapshot.as_ref()).await;
+    context.insert("travel_search_location", &travel_search_location);
     insert_travel_context(&mut context, snapshot.as_ref());
     context.insert("travel_snoozed", &reconnect_snoozed);
     context.insert("travel_just_refreshed", &travel_just_refreshed);
@@ -345,10 +550,54 @@ async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<St
     Ok(state.tera.render("dashboard.html", &context)?)
 }
 
+async fn reload_contact_after_vcf_edit(state: &AppState, uid: &str) {
+    let as_of = Local::now().date_naive();
+    if let Err(e) = remove_contact_from_current_snapshot(&state.cache_root, as_of, uid) {
+        tracing::warn!("Could not update travel snapshot after VCF edit: {}", e);
+    }
+    if let Err(e) = reload_contacts_cache(state).await {
+        tracing::warn!("VCF reload after edit failed: {}", e);
+    }
+}
+
+async fn apply_random_pick_category(state: &AppState, form: &TravelSnoozeForm) -> Result<(), String> {
+    let choice = form.reconnect.trim();
+    if choice.is_empty() {
+        return Err("Choose a reconnect interval or Do Not Engage.".into());
+    }
+    if !RECONNECT_SNOOZE_OPTIONS.contains(&choice) {
+        return Err("Invalid category option.".into());
+    }
+
+    let as_of = Local::now().date_naive();
+    let contact = find_contact_by_uid(&state.contacts_dir, &form.uid)
+        .map_err(|e| format!("Contact not found: {e}"))?;
+
+    set_random_pick_category(&contact, choice, as_of)
+        .map_err(|e| format!("Failed to update contact: {e}"))?;
+
+    reload_contact_after_vcf_edit(state, &form.uid).await;
+
+    Ok(())
+}
+
+async fn random_category(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<TravelSnoozeForm>,
+) -> Response {
+    match apply_random_pick_category(&state, &form).await {
+        Ok(()) => Redirect::to("/?random_category_saved=1").into_response(),
+        Err(message) => {
+            tracing::error!("Random pick category failed for {}: {}", form.uid, message);
+            Redirect::to("/?travel_error=1").into_response()
+        }
+    }
+}
+
 async fn apply_travel_snooze(state: &AppState, form: &TravelSnoozeForm) -> Result<(), String> {
     let reconnect = form.reconnect.trim();
     if reconnect.is_empty() {
-        return Err("Choose a reconnect interval.".into());
+        return Err("Choose a reconnect interval or Do Not Engage.".into());
     }
     if !RECONNECT_SNOOZE_OPTIONS.contains(&reconnect) {
         return Err("Invalid reconnect interval.".into());
@@ -358,15 +607,10 @@ async fn apply_travel_snooze(state: &AppState, form: &TravelSnoozeForm) -> Resul
     let contact = find_contact_by_uid(&state.contacts_dir, &form.uid)
         .map_err(|e| format!("Contact not found: {e}"))?;
 
-    set_reconnect_snooze(&contact, reconnect, as_of)
+    set_random_pick_category(&contact, reconnect, as_of)
         .map_err(|e| format!("Failed to update contact: {e}"))?;
 
-    if let Err(e) = remove_contact_from_current_snapshot(&state.cache_root, as_of, &form.uid) {
-        tracing::warn!("Could not update travel snapshot after snooze: {}", e);
-    }
-    if let Err(e) = sync_contacts_from_vcf(&state.pool, &state.contacts_dir).await {
-        tracing::warn!("VCF sync after snooze failed: {}", e);
-    }
+    reload_contact_after_vcf_edit(state, &form.uid).await;
 
     Ok(())
 }
@@ -411,24 +655,68 @@ async fn travel_snooze(
     }
 }
 
+async fn random_shuffle(State(state): State<Arc<AppState>>) -> Response {
+    let as_of = Local::now().date_naive();
+    let contacts = contacts_snapshot(&state);
+    let current_uids = match resolve_random_picks(
+        contacts.as_ref(),
+        &state.cache_root,
+        as_of,
+        RANDOM_PICK_COUNT,
+    ) {
+        Ok(week) => week.picks.into_iter().map(|p| p.uid).collect(),
+        Err(_) => Vec::new(),
+    };
+    match shuffle_and_save(
+        contacts.as_ref(),
+        &state.cache_root,
+        as_of,
+        RANDOM_PICK_COUNT,
+        &current_uids,
+    ) {
+        Ok(week) => {
+            info!(
+                "Random picks shuffled: {:?}",
+                week.picks
+                    .iter()
+                    .map(|p| p.full_name.as_str())
+                    .collect::<Vec<_>>()
+            );
+            Redirect::to("/?random_shuffled=1").into_response()
+        }
+        Err(e) => {
+            tracing::error!("Random shuffle failed: {}", e);
+            Redirect::to("/?random_shuffle_error=1").into_response()
+        }
+    }
+}
+
 async fn travel_refresh(
     State(state): State<Arc<AppState>>,
     axum::Form(form): axum::Form<TravelRefreshForm>,
 ) -> Response {
-    if let Err(e) = sync_contacts_from_vcf(&state.pool, &state.contacts_dir).await {
-        tracing::error!("VCF sync before travel refresh failed: {}", e);
+    if let Err(e) = reload_contacts_cache(&state).await {
+        tracing::error!("VCF reload before travel refresh failed: {}", e);
     }
 
     let metro_radius_mi = clamp_metro_radius_mi(form.metro_radius_mi);
+    let search_location = form.search_location.trim();
     let mut config = TravelBuildConfig::from_env(Local::now().date_naive());
     config.contacts_dir = state.contacts_dir.clone();
     config.cache_root = state.cache_root.clone();
     config.force = true;
+    config.ensure_contact_geo = false;
     config.metro_radius_km = miles_to_km(metro_radius_mi as f64);
+    config.search_location = if search_location.is_empty() {
+        None
+    } else {
+        Some(search_location.to_string())
+    };
 
     info!(
         metro_radius_mi,
-        "Starting travel match build (fetch calendar + geocode contacts; may take several minutes for large exports)..."
+        search_location = config.search_location.as_deref().unwrap_or("(all calendar trips)"),
+        "Starting travel match build (calendar + cached contact GEO only; full geocode runs on weekly scan)..."
     );
 
     match build_travel_week_snapshot(&config).await {
@@ -459,7 +747,8 @@ async fn digest_preview(State(state): State<Arc<AppState>>) -> Response {
 }
 
 async fn render_digest_preview(state: &AppState) -> Result<String> {
-    let (tasks, reconnects) = fetch_due(&state.pool, &state.contacts_dir).await?;
+    let contacts = contacts_snapshot(&state);
+    let (tasks, reconnects) = fetch_due(&state.pool, &contacts).await?;
 
     let mut context = TeraContext::new();
     context.insert("nav_active", "preview");
@@ -492,7 +781,7 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(".cache"));
 
-    sync_contacts_from_vcf(&pool, &contacts_dir).await?;
+    let contacts = sync_contacts_from_vcf(&pool, &contacts_dir).await?;
 
     let mut tera = Tera::new("pepper-web/templates/**/*.html")?;
     tera.autoescape_on(vec!["html"]);
@@ -503,12 +792,15 @@ async fn main() -> Result<()> {
         tera,
         cache_root,
         contacts_dir,
+        contacts: Arc::new(RwLock::new(contacts)),
     });
 
     let app = Router::new()
         .route("/", get(index))
         .route("/travel/refresh", post(travel_refresh))
         .route("/travel/snooze", post(travel_snooze))
+        .route("/random/shuffle", post(random_shuffle))
+        .route("/random/category", post(random_category))
         .route("/preview", get(digest_preview))
         .nest_service("/static", ServeDir::new("pepper-web/static"))
         .nest_service("/assets", ServeDir::new("assets"))

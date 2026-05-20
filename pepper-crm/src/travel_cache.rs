@@ -123,6 +123,7 @@ mod tests {
             week_end: end,
             built_at: Utc::now(),
             metro_radius_km: 50.0,
+            search_location: None,
             trips: vec![TravelTripWithMatches {
                 title: "Chicago, IL".to_string(),
                 start,

@@ -15,11 +15,12 @@
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
+use crate::birthdays::parse_bday_value;
 use crate::geo::GeoPoint;
 use crate::models::Contact;
 use crate::tags::{
     append_log_entry, extract_log_entries, format_month_year_note_prefix, parse_categories_value,
-    parse_todos, resolve_reconnect_tag, RECONNECT_CATEGORY_PREFIX,
+    parse_todos, resolve_reconnect_tag, DO_NOT_ENGAGE_CATEGORY, RECONNECT_CATEGORY_PREFIX,
 };
 
 /// vCard extension: normalized address query used when `GEO` was written.
@@ -157,6 +158,7 @@ fn parse_vcard_content_with_index(
     let mut structured_name = String::new();
     let mut email = None;
     let mut phone = None;
+    let mut urls: Vec<String> = Vec::new();
     let mut org = None;
     let mut city = None;
     let mut state = None;
@@ -165,6 +167,7 @@ fn parse_vcard_content_with_index(
     let mut geo_source = None;
     let mut categories: Vec<String> = Vec::new();
     let mut note_raw = String::new();
+    let mut birthday = None;
     let mut rev = None;
 
     for line in unfolded.lines() {
@@ -197,12 +200,17 @@ fn parse_vcard_content_with_index(
                 if phone.is_none() {
                     phone = Some(value);
                 }
+            } else if key.starts_with("URL") {
+                if !value.is_empty() {
+                    urls.push(value);
+                }
             } else if key.starts_with("ORG") {
                 org = Some(value);
             } else if key.starts_with("NOTE") {
                 note_raw = normalize_note_field(&value);
             } else if key.starts_with("ADR") {
-                apply_adr_value(&value, &mut city, &mut state, &mut country);
+                let adr_value = normalize_adr_field_value(&value);
+                apply_adr_value(&adr_value, &mut city, &mut state, &mut country);
             } else if key.starts_with("GEO") {
                 if let Some(p) = parse_geo_value(&value) {
                     geo = Some(p);
@@ -211,6 +219,10 @@ fn parse_vcard_content_with_index(
                 geo_source = Some(value);
             } else if key.starts_with("CATEGORIES") || key.starts_with("CATEGORY") {
                 categories.extend(parse_categories_value(&value));
+            } else if key.starts_with("BDAY") {
+                if birthday.is_none() {
+                    birthday = parse_bday_value(&value);
+                }
             } else if key.starts_with("REV") {
                 if rev.is_none() {
                     rev = parse_rev_value(&value);
@@ -242,6 +254,7 @@ fn parse_vcard_content_with_index(
         full_name,
         email,
         phone,
+        urls,
         org,
         city,
         state,
@@ -252,6 +265,7 @@ fn parse_vcard_content_with_index(
         note_raw,
         todos,
         reconnect_tag,
+        birthday,
         rev,
         log_entries,
         vcf_path,
@@ -341,30 +355,133 @@ fn synthesize_uid(
 
 /// Build a geocoder query from parsed ADR fields (same logic travel matching uses).
 pub fn contact_address_query(contact: &Contact) -> Option<String> {
-    let city = contact.city.as_ref()?.trim();
-    if city.is_empty() {
-        return None;
-    }
-    let state = contact
+    geocode_queries_for_contact(contact).into_iter().next()
+}
+
+/// Ordered geocode queries for a contact (best first, fallbacks after).
+pub fn geocode_queries_for_contact(contact: &Contact) -> Vec<String> {
+    let city_raw = contact
+        .city
+        .as_deref()
+        .map(clean_location_token)
+        .filter(|s| !s.is_empty());
+    let state_raw = contact
         .state
         .as_deref()
-        .map(str::trim)
+        .map(clean_location_token)
         .filter(|s| !s.is_empty());
-    let country = contact
+    let country_raw = contact
         .country
         .as_deref()
-        .map(str::trim)
+        .map(clean_location_token)
         .filter(|s| !s.is_empty());
 
+    let Some(city) = city_raw else {
+        return Vec::new();
+    };
+
+    let mut queries = Vec::new();
+
     if city.contains(',') {
-        return Some(city.to_string());
+        if let Some(q) = city_state_query_from_comma_address(&city) {
+            push_unique_query(&mut queries, q);
+        }
     }
 
-    match (state, country) {
-        (Some(st), _) => Some(format!("{city}, {st}")),
-        (None, Some(ctry)) => Some(format!("{city}, {ctry}")),
-        (None, None) if city.len() <= 3 => Some(format!("{city}, USA")),
-        (None, None) => Some(city.to_string()),
+    if let Some(st) = &state_raw {
+        push_unique_query(&mut queries, format!("{city}, {st}"));
+    } else if let Some(ctry) = &country_raw {
+        push_unique_query(&mut queries, format!("{city}, {ctry}"));
+    } else if city.len() <= 3 {
+        push_unique_query(&mut queries, format!("{city}, USA"));
+    }
+
+    push_unique_query(&mut queries, city);
+    queries
+}
+
+fn push_unique_query(out: &mut Vec<String>, query: String) {
+    let q = query.trim();
+    if q.is_empty() {
+        return;
+    }
+    let key = crate::geo::normalize_geocode_query(q);
+    if out
+        .iter()
+        .any(|existing| crate::geo::normalize_geocode_query(existing) == key)
+    {
+        return;
+    }
+    out.push(q.to_string());
+}
+
+fn clean_location_token(s: &str) -> String {
+    s.trim()
+        .trim_end_matches('=')
+        .trim()
+        .replace('\n', ", ")
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn normalize_adr_field_value(value: &str) -> String {
+    let decoded = if value.contains('=') {
+        decode_quoted_printable(value)
+    } else {
+        value.to_string()
+    };
+    decoded
+        .replace('\n', ", ")
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn city_state_query_from_comma_address(s: &str) -> Option<String> {
+    let parts: Vec<&str> = s
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != "=")
+        .collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let last = parts.last()?.to_ascii_lowercase();
+    let end = if parts.len() >= 3
+        && (last == "usa"
+            || last == "us"
+            || last == "united states"
+            || last.len() > 3 && !parse_state_token(parts.last()?).is_some())
+    {
+        parts.len() - 1
+    } else {
+        parts.len()
+    };
+
+    for i in (1..end).rev() {
+        if let Some(st) = parse_state_token(parts[i]) {
+            let city = clean_location_token(parts[i - 1]);
+            if !city.is_empty() {
+                return Some(format!("{city}, {st}"));
+            }
+        }
+    }
+    None
+}
+
+fn parse_state_token(s: &str) -> Option<String> {
+    let s = clean_location_token(s);
+    let first = s.split_whitespace().next()?;
+    if first.len() == 2 && first.chars().all(|c| c.is_ascii_alphabetic()) {
+        Some(first.to_ascii_uppercase())
+    } else {
+        None
     }
 }
 
@@ -529,28 +646,75 @@ fn apply_adr_value(value: &str, city: &mut Option<String>, state: &mut Option<St
 
     // Prefer city component; fall back to street (Google often puts full address in part 2).
     if let Some(c) = locality {
-        *city = Some((*c).to_string());
+        *city = Some(clean_location_token(c));
     } else if let Some(s) = street {
-        *city = Some((*s).to_string());
+        let street_clean = clean_location_token(s);
+        if let Some((c, st, ctry)) = extract_city_state_from_comma_address(&street_clean) {
+            *city = Some(c);
+            if state.is_none() {
+                *state = Some(st);
+            }
+            if country.is_none() {
+                *country = ctry;
+            }
+        } else {
+            *city = Some(street_clean);
+        }
     }
 
     if let Some(s) = region {
-        *state = Some((*s).to_string());
+        *state = Some(clean_location_token(s));
     }
     if let Some(n) = nation {
-        *country = Some((*n).to_string());
+        *country = Some(clean_location_token(n));
     }
 
     // ;;;City;State;; — city in region slot when locality empty
     if city.is_none() {
         if let Some(c) = region {
-            *city = Some((*c).to_string());
+            *city = Some(clean_location_token(c));
             *state = trimmed
                 .get(5)
                 .filter(|s| !s.is_empty())
-                .map(|s| (*s).to_string());
+                .map(|s| clean_location_token(s));
         }
     }
+
+    if city.is_none() {
+        return;
+    }
+    if state.is_none() || city.as_ref().is_some_and(|c| c.contains(',')) {
+        if let Some(c) = city.as_ref() {
+            if let Some((parsed_city, parsed_state, parsed_country)) =
+                extract_city_state_from_comma_address(c)
+            {
+                *city = Some(parsed_city);
+                if state.is_none() {
+                    *state = Some(parsed_state);
+                }
+                if country.is_none() {
+                    *country = parsed_country;
+                }
+            }
+        }
+    }
+}
+
+fn extract_city_state_from_comma_address(s: &str) -> Option<(String, String, Option<String>)> {
+    let q = city_state_query_from_comma_address(s)?;
+    let (city, st) = q.split_once(", ")?;
+    let parts: Vec<&str> = s.split(',').map(str::trim).filter(|p| !p.is_empty()).collect();
+    let last = parts.last()?.to_ascii_lowercase();
+    let country = if parts.len() >= 3
+        && (last == "usa" || last == "us" || last == "united states")
+    {
+        None
+    } else if parts.len() >= 3 && parse_state_token(parts.last()?).is_none() {
+        Some(clean_location_token(parts.last()?))
+    } else {
+        None
+    };
+    Some((city.to_string(), st.to_string(), country))
 }
 
 fn decode_quoted_printable(input: &str) -> String {
@@ -637,6 +801,15 @@ pub fn find_contact_by_uid(contacts_dir: &Path, uid: &str) -> Result<Contact> {
     anyhow::bail!("contact UID {uid} not found under {}", contacts_dir.display())
 }
 
+/// Set reconnect interval or `Do Not Engage` from the Random People dashboard dropdown.
+pub fn set_random_pick_category(contact: &Contact, choice: &str, as_of: NaiveDate) -> Result<()> {
+    if choice.trim().eq_ignore_ascii_case(DO_NOT_ENGAGE_CATEGORY) {
+        set_do_not_engage(contact, as_of)
+    } else {
+        set_reconnect_snooze(contact, choice, as_of)
+    }
+}
+
 /// Set `Reconnect: …`, update `REV` (reconnect anchor), and stamp NOTE.
 pub fn set_reconnect_snooze(contact: &Contact, reconnect_body: &str, as_of: NaiveDate) -> Result<()> {
     let rev_stamp = format_rev_timestamp(Utc::now());
@@ -687,6 +860,185 @@ pub fn set_reconnect_snooze(contact: &Contact, reconnect_body: &str, as_of: Naiv
     Ok(())
 }
 
+/// Replace the vCard `NOTE` field (used when enriching a contact from the dashboard).
+pub fn set_contact_note(contact: &Contact, note: &str) -> Result<()> {
+    let note = note.trim();
+    if note.is_empty() {
+        anyhow::bail!("Note cannot be empty");
+    }
+
+    let content = fs::read_to_string(&contact.vcf_path)
+        .with_context(|| format!("Failed to read VCF file: {}", contact.vcf_path.display()))?;
+
+    let blocks = split_vcard_blocks(&content);
+    let mut found = false;
+    let updated_blocks: Vec<String> = blocks
+        .into_iter()
+        .enumerate()
+        .map(|(index, block)| {
+            if !vcard_block_matches_contact(&block, contact, &contact.vcf_path, index) {
+                return block;
+            }
+            found = true;
+            upsert_note_in_block(&block, note)
+        })
+        .collect();
+
+    if !found {
+        anyhow::bail!(
+            "UID {} not found in {}",
+            contact.uid,
+            contact.vcf_path.display()
+        );
+    }
+
+    fs::write(&contact.vcf_path, join_vcard_blocks(&updated_blocks)).with_context(|| {
+        format!(
+            "Failed to write note to {}",
+            contact.vcf_path.display()
+        )
+    })?;
+
+    debug!(
+        "Set note on {} for {}",
+        contact.vcf_path.display(),
+        contact.uid
+    );
+    Ok(())
+}
+
+/// Set city/state on the vCard `ADR` field; clears stale `GEO` so travel can re-geocode.
+pub fn set_contact_location(contact: &Contact, city: &str, state: Option<&str>) -> Result<()> {
+    let city = city.trim();
+    if city.is_empty() {
+        anyhow::bail!("City is required");
+    }
+    let state = state.map(str::trim).filter(|s| !s.is_empty());
+
+    let content = fs::read_to_string(&contact.vcf_path)
+        .with_context(|| format!("Failed to read VCF file: {}", contact.vcf_path.display()))?;
+
+    let blocks = split_vcard_blocks(&content);
+    let mut found = false;
+    let updated_blocks: Vec<String> = blocks
+        .into_iter()
+        .enumerate()
+        .map(|(index, block)| {
+            if !vcard_block_matches_contact(&block, contact, &contact.vcf_path, index) {
+                return block;
+            }
+            found = true;
+            upsert_adr_in_block(&block, city, state)
+        })
+        .collect();
+
+    if !found {
+        anyhow::bail!(
+            "UID {} not found in {}",
+            contact.uid,
+            contact.vcf_path.display()
+        );
+    }
+
+    fs::write(&contact.vcf_path, join_vcard_blocks(&updated_blocks)).with_context(|| {
+        format!(
+            "Failed to write location to {}",
+            contact.vcf_path.display()
+        )
+    })?;
+
+    debug!(
+        "Set location on {} for {}",
+        contact.vcf_path.display(),
+        contact.uid
+    );
+    Ok(())
+}
+
+fn upsert_note_in_block(block: &str, new_note: &str) -> String {
+    let unfolded = unfold_vcard_lines(block);
+    let mut out = String::new();
+    let mut note_done = false;
+
+    for line in unfolded.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line_starts_with_property(line, "NOTE") {
+            if !note_done {
+                out.push_str(&format!("NOTE:{new_note}\n"));
+                note_done = true;
+            }
+            continue;
+        }
+        if line.trim() == "END:VCARD" {
+            if !note_done {
+                out.push_str(&format!("NOTE:{new_note}\n"));
+                note_done = true;
+            }
+            out.push_str("END:VCARD\n");
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    out
+}
+
+fn adr_line_key_from_block(block: &str) -> String {
+    for line in unfold_vcard_lines(block).lines() {
+        if line_starts_with_property(line, "ADR") {
+            return line.split(':').next().unwrap_or("ADR;TYPE=HOME").to_string();
+        }
+    }
+    "ADR;TYPE=HOME".to_string()
+}
+
+fn format_adr_value(city: &str, state: Option<&str>) -> String {
+    match state {
+        Some(st) => format!(";;;{city};{st};;"),
+        None => format!(";;;{city};;;"),
+    }
+}
+
+fn upsert_adr_in_block(block: &str, city: &str, state: Option<&str>) -> String {
+    let adr_key = adr_line_key_from_block(block);
+    let adr_value = format_adr_value(city, state);
+    let unfolded = unfold_vcard_lines(block);
+    let mut out = String::new();
+    let mut adr_done = false;
+
+    for line in unfolded.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line_starts_with_property(line, "ADR") {
+            if !adr_done {
+                out.push_str(&format!("{adr_key}:{adr_value}\n"));
+                adr_done = true;
+            }
+            continue;
+        }
+        if line_starts_with_property(line, "GEO") || line_starts_with_property(line, PEPPER_GEO_SOURCE)
+        {
+            continue;
+        }
+        if line.trim() == "END:VCARD" {
+            if !adr_done {
+                out.push_str(&format!("{adr_key}:{adr_value}\n"));
+                adr_done = true;
+            }
+            out.push_str("END:VCARD\n");
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    out
+}
+
 fn prepend_note_line(note: &str, line: &str) -> String {
     let trimmed = note.trim();
     if trimmed.is_empty() {
@@ -702,11 +1054,75 @@ fn upsert_reconnect_categories(categories: &[String], reconnect_body: &str) -> V
         .filter(|c| {
             let t = c.trim();
             !t.starts_with(RECONNECT_CATEGORY_PREFIX)
+                && !t.eq_ignore_ascii_case(DO_NOT_ENGAGE_CATEGORY)
         })
         .cloned()
         .collect();
     out.push(format!("{RECONNECT_CATEGORY_PREFIX} {reconnect_body}"));
     out
+}
+
+fn upsert_do_not_engage_categories(categories: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = categories
+        .iter()
+        .filter(|c| {
+            let t = c.trim();
+            !t.starts_with(RECONNECT_CATEGORY_PREFIX)
+                && !t.eq_ignore_ascii_case(DO_NOT_ENGAGE_CATEGORY)
+        })
+        .cloned()
+        .collect();
+    out.push(DO_NOT_ENGAGE_CATEGORY.to_string());
+    out
+}
+
+fn set_do_not_engage(contact: &Contact, as_of: NaiveDate) -> Result<()> {
+    let rev_stamp = format_rev_timestamp(Utc::now());
+    let stamp = format!(
+        "{}: Marked Do Not Engage.",
+        format_month_year_note_prefix(as_of)
+    );
+    let updated_note = prepend_note_line(&contact.note_raw, &stamp);
+    let updated_categories = upsert_do_not_engage_categories(&contact.categories);
+
+    let content = fs::read_to_string(&contact.vcf_path)
+        .with_context(|| format!("Failed to read VCF file: {}", contact.vcf_path.display()))?;
+
+    let blocks = split_vcard_blocks(&content);
+    let mut found = false;
+    let updated_blocks: Vec<String> = blocks
+        .into_iter()
+        .enumerate()
+        .map(|(index, block)| {
+            if !vcard_block_matches_contact(&block, contact, &contact.vcf_path, index) {
+                return block;
+            }
+            found = true;
+            upsert_reconnect_in_block(&block, &updated_note, &updated_categories, &rev_stamp)
+        })
+        .collect();
+
+    if !found {
+        anyhow::bail!(
+            "UID {} not found in {}",
+            contact.uid,
+            contact.vcf_path.display()
+        );
+    }
+
+    fs::write(&contact.vcf_path, join_vcard_blocks(&updated_blocks)).with_context(|| {
+        format!(
+            "Failed to write Do Not Engage to {}",
+            contact.vcf_path.display()
+        )
+    })?;
+
+    debug!(
+        "Set Do Not Engage on {} for {}",
+        contact.vcf_path.display(),
+        contact.uid
+    );
+    Ok(())
 }
 
 fn upsert_reconnect_in_block(
@@ -888,6 +1304,18 @@ END:VCARD"#;
     }
 
     #[test]
+    fn test_parse_url_fields() {
+        let vcf = r#"BEGIN:VCARD
+FN:Pat Example
+URL:https://www.linkedin.com/in/patexample
+URL:https://example.com
+END:VCARD"#;
+        let c = parse_vcard_content(vcf, PathBuf::from("c.vcf")).unwrap();
+        assert_eq!(c.urls.len(), 2);
+        assert!(c.urls[0].contains("linkedin.com"));
+    }
+
+    #[test]
     fn test_parse_org_only_without_fn() {
         let vcf = r#"BEGIN:VCARD
 VERSION:2.1
@@ -910,7 +1338,12 @@ ADR;HOME:;;98 Lakeview Dr, Chepachet, RI;;;;
 END:VCARD"#;
         let c = parse_vcard_content(vcf, PathBuf::from("contacts.vcf")).unwrap();
         assert!(c.uid.starts_with("gen:"));
-        assert_eq!(c.city.as_deref(), Some("98 Lakeview Dr, Chepachet, RI"));
+        assert_eq!(c.city.as_deref(), Some("Chepachet"));
+        assert_eq!(c.state.as_deref(), Some("RI"));
+        assert_eq!(
+            contact_address_query(&c).as_deref(),
+            Some("Chepachet, RI")
+        );
     }
 
     #[test]
@@ -1011,5 +1444,70 @@ END:VCARD"#;
         assert_eq!(contact.email, Some("alice@example.com".to_string()));
         assert_eq!(contact.todos.len(), 1, "Expected 1 TODO, got {} - Note: {}", contact.todos.len(), contact.note_raw);
         assert_eq!(contact.reconnect_tag, Some("3 months".to_string()));
+    }
+
+    #[test]
+    fn test_geocode_queries_from_full_google_address() {
+        let vcf = r#"BEGIN:VCARD
+FN:Alex Example
+ADR;TYPE=HOME:;;24 Peabody Terrace apt 709, Cambridge, MA 02138, USA;;;;
+END:VCARD"#;
+        let c = parse_vcard_content(vcf, PathBuf::from("c.vcf")).unwrap();
+        let queries = geocode_queries_for_contact(&c);
+        assert!(queries.iter().any(|q| q == "Cambridge, MA"));
+    }
+
+    #[test]
+    fn test_geocode_queries_from_quoted_printable_adr() {
+        let vcf = r#"BEGIN:VCARD
+FN:Anna Example
+ADR;TYPE=HOME:;;=32=35=20=4D=6F=75=6E=74=20=56=65=72=6E=6F=6E=20=53=74=0A=53=6F=6D=65=72=76=69=6C=6C=65=2C=20=4D=41=20=30=32=31=34=33=2C=20=55=53=41;;;;
+END:VCARD"#;
+        let c = parse_vcard_content(vcf, PathBuf::from("c.vcf")).unwrap();
+        let queries = geocode_queries_for_contact(&c);
+        assert!(queries.iter().any(|q| q.contains("Somerville")));
+        assert!(queries.iter().any(|q| q == "Somerville, MA"));
+    }
+
+    #[test]
+    fn test_geocode_queries_city_state_from_semicolon_adr() {
+        let vcf = r#"BEGIN:VCARD
+FN:Mathew Example
+ADR;TYPE=HOME:;;;Somervile;MA;;;
+END:VCARD"#;
+        let c = parse_vcard_content(vcf, PathBuf::from("c.vcf")).unwrap();
+        assert_eq!(contact_address_query(&c).as_deref(), Some("Somervile, MA"));
+    }
+
+    #[test]
+    fn test_set_contact_note_and_location() {
+        let vcf = r#"BEGIN:VCARD
+VERSION:3.0
+UID:note-loc-test
+FN:Jamie Test
+ORG:Example Co
+END:VCARD"#;
+        let dir = std::env::temp_dir().join("pepper_note_loc");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("jamie.vcf");
+        fs::write(&path, vcf).unwrap();
+
+        let contact = parse_vcards_from_path(&path).unwrap().remove(0);
+        assert!(contact.note_raw.is_empty());
+        assert!(contact.city.is_none());
+
+        set_contact_note(&contact, "Met at a meetup. Works on robotics.").unwrap();
+        set_contact_location(&contact, "Portland", Some("OR")).unwrap();
+
+        let updated = parse_vcards_from_path(&path).unwrap().remove(0);
+        assert!(updated.note_raw.contains("Met at a meetup"));
+        assert_eq!(updated.city.as_deref(), Some("Portland"));
+        assert_eq!(updated.state.as_deref(), Some("OR"));
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("NOTE:Met at a meetup"));
+        assert!(raw.contains("ADR;TYPE=HOME:;;;Portland;OR;;"));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

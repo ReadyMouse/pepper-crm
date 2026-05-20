@@ -17,7 +17,7 @@
 
 use crate::geo::{normalize_geocode_query, GeoPoint, Geocoder, NominatimGeocoder};
 use crate::models::Contact;
-use crate::vcard::{contact_address_query, write_contact_geo};
+use crate::vcard::{contact_address_query, geocode_queries_for_contact, write_contact_geo};
 use anyhow::Result;
 use tracing::info;
 
@@ -28,6 +28,7 @@ pub struct GeocodeEnsureStats {
     pub already_ok: usize,
     pub geocoded: usize,
     pub failed: usize,
+    pub failed_cached: usize,
 }
 
 /// True when the contact has an address but no valid GEO for the current address.
@@ -60,28 +61,52 @@ pub async fn ensure_contacts_geocoded(
             stats.skipped_no_address += 1;
             continue;
         }
+        if let Some(point) = stamp_legacy_geo_if_needed(contact, write_back) {
+            contact.geo = Some(point);
+            stats.already_ok += 1;
+            continue;
+        }
         if !needs_geocoding(contact) {
             stats.already_ok += 1;
             continue;
         }
-        let query = contact_address_query(contact).expect("checked above");
-        match geocoder.geocode_async(&query).await {
-            Ok(point) => {
-                let source = normalize_geocode_query(&query);
+        let queries = geocode_queries_for_contact(contact);
+        if queries.is_empty() {
+            stats.skipped_no_address += 1;
+            continue;
+        }
+        if queries
+            .iter()
+            .all(|q| geocoder.is_failure_cached(q).unwrap_or(false))
+        {
+            stats.failed_cached += 1;
+            continue;
+        }
+        match geocoder.geocode_queries_async(&queries).await {
+            Ok((point, matched_query)) => {
+                let source = normalize_geocode_query(&matched_query);
                 apply_geocode_to_contact(contact, point, &source, write_back);
                 stats.geocoded += 1;
             }
             Err(e) => {
                 tracing::debug!(uid = %contact.uid, error = %e, "contact geocode failed");
-                stats.failed += 1;
+                if queries
+                    .iter()
+                    .any(|q| geocoder.is_failure_cached(q).unwrap_or(false))
+                {
+                    stats.failed_cached += 1;
+                } else {
+                    stats.failed += 1;
+                }
             }
         }
     }
-    if stats.geocoded > 0 || stats.failed > 0 {
+    if stats.geocoded > 0 || stats.failed > 0 || stats.failed_cached > 0 {
         info!(
             geocoded = stats.geocoded,
             already_ok = stats.already_ok,
             failed = stats.failed,
+            failed_cached = stats.failed_cached,
             skipped = stats.skipped_no_address,
             "Contact GEO ensure pass"
         );
@@ -101,24 +126,85 @@ pub fn ensure_contacts_geocoded_sync<G: Geocoder>(
             stats.skipped_no_address += 1;
             continue;
         }
+        if let Some(point) = stamp_legacy_geo_if_needed(contact, write_back) {
+            contact.geo = Some(point);
+            stats.already_ok += 1;
+            continue;
+        }
         if !needs_geocoding(contact) {
             stats.already_ok += 1;
             continue;
         }
-        let query = contact_address_query(contact).expect("checked above");
-        match geocoder.geocode(&query) {
-            Ok(point) => {
-                let source = normalize_geocode_query(&query);
+        let queries = geocode_queries_for_contact(contact);
+        if queries.is_empty() {
+            stats.skipped_no_address += 1;
+            continue;
+        }
+        if queries
+            .iter()
+            .all(|q| geocoder.is_failure_cached(q).unwrap_or(false))
+        {
+            stats.failed_cached += 1;
+            continue;
+        }
+        match geocode_queries_with_geocoder(geocoder, &queries) {
+            Ok((point, matched_query)) => {
+                let source = normalize_geocode_query(&matched_query);
                 apply_geocode_to_contact(contact, point, &source, write_back);
                 stats.geocoded += 1;
             }
             Err(e) => {
                 tracing::debug!(uid = %contact.uid, error = %e, "contact geocode failed");
-                stats.failed += 1;
+                if queries
+                    .iter()
+                    .any(|q| geocoder.is_failure_cached(q).unwrap_or(false))
+                {
+                    stats.failed_cached += 1;
+                } else {
+                    stats.failed += 1;
+                }
             }
         }
     }
     Ok(stats)
+}
+
+fn geocode_queries_with_geocoder<G: Geocoder>(
+    geocoder: &G,
+    queries: &[String],
+) -> Result<(GeoPoint, String)> {
+    let mut last_err = None;
+    for query in queries {
+        if query.trim().is_empty() {
+            continue;
+        }
+        match geocoder.geocode(query) {
+            Ok(point) => return Ok((point, query.clone())),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no geocode queries provided")))
+}
+
+/// Stamp `geo_source` for legacy cards that already have `GEO` without re-fetching coordinates.
+fn stamp_legacy_geo_if_needed(contact: &mut Contact, write_back: bool) -> Option<GeoPoint> {
+    if contact.geo.is_none() || contact.geo_source.is_some() {
+        return None;
+    }
+    let query = contact_address_query(contact)?;
+    let source = normalize_geocode_query(&query);
+    if write_back {
+        if let Err(e) = write_contact_geo(contact, contact.geo?, &source) {
+            tracing::warn!(
+                uid = %contact.uid,
+                path = %contact.vcf_path.display(),
+                error = %e,
+                "GEO source write-back to vCard failed"
+            );
+        }
+    }
+    contact.geo_source = Some(source);
+    contact.geo
 }
 
 fn apply_geocode_to_contact(
@@ -153,6 +239,7 @@ mod tests {
             full_name: "Test".to_string(),
             email: None,
             phone: None,
+            urls: vec![],
             org: None,
             city: Some(city.to_string()),
             state: Some(state.to_string()),
@@ -163,6 +250,7 @@ mod tests {
             note_raw: String::new(),
             todos: vec![],
             reconnect_tag: None,
+            birthday: None,
             rev: None,
             log_entries: vec![],
             vcf_path: PathBuf::from("/tmp/u1.vcf"),

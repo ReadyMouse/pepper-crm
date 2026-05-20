@@ -29,6 +29,27 @@ cargo test -p pepper-crm --test generate_test_contacts -- --ignored
 - `Reconnect:` in `CATEGORIES` (e.g. `CATEGORIES:Reconnect: 3 months`)
 - CRM log appended below `--- CRM Log ---`
 
+### Engagement categories
+
+Set on vCard `CATEGORIES` (same field as `Reconnect:` tags).
+
+| Category | Meaning | Still in VCF? |
+|----------|---------|---------------|
+| `Reconnect: Never` | No timed reconnect nudges; close contacts (e.g. mom). May appear in Random Person of the Week and birthday reminders. **Never** in Reconnects Due or Next Week Travel. | Yes |
+| `Do Not Engage` | Never surface anywhere — no suggestions, travel, random pick, or search. Keep the card for your records only. | Yes |
+
+Examples:
+
+```vcf
+CATEGORIES:Reconnect: Never
+```
+
+```vcf
+CATEGORIES:Do Not Engage
+```
+
+Full rules: [`README.md` — Engagement categories](README.md#engagement-categories-in-categories).
+
 ## Open-source candidate
 
 **N/A** — sample data only; real exports should stay gitignored.

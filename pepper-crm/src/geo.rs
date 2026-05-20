@@ -47,6 +47,11 @@ pub struct GeoPoint {
 /// Geocode a place name (with optional file-backed cache).
 pub trait Geocoder: Send + Sync {
     fn geocode(&self, query: &str) -> Result<GeoPoint>;
+
+    /// True when a recent miss is cached for this query (default: never).
+    fn is_failure_cached(&self, _query: &str) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 /// Great-circle distance in kilometers (Haversine).
@@ -80,30 +85,80 @@ struct CachedGeoEntry {
     fetched_at: DateTime<Utc>,
 }
 
-/// File-backed geocode cache under `.cache/geocode/`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedGeoFailure {
+    fetched_at: DateTime<Utc>,
+}
+
+/// File-backed geocode cache under `.cache/geocode/` (successes and failures).
 pub struct FileGeocodeCache {
     cache_dir: PathBuf,
+    fail_dir: PathBuf,
     ttl_days: i64,
 }
 
 impl FileGeocodeCache {
     pub fn new(cache_root: impl AsRef<Path>, ttl_days: i64) -> Self {
+        let cache_dir = cache_root.as_ref().join("geocode");
         Self {
-            cache_dir: cache_root.as_ref().join("geocode"),
+            fail_dir: cache_dir.join("fail"),
+            cache_dir,
             ttl_days,
         }
     }
 
-    fn cache_path(&self, query: &str) -> PathBuf {
+    fn cache_key(query: &str) -> String {
         let key = normalize_geocode_query(query);
-        let safe: String = key
-            .chars()
+        key.chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .collect();
-        self.cache_dir.join(format!("{safe}.json"))
+            .collect()
+    }
+
+    fn cache_path(&self, query: &str) -> PathBuf {
+        self.cache_dir.join(format!("{}.json", Self::cache_key(query)))
+    }
+
+    fn failure_path(&self, query: &str) -> PathBuf {
+        self.fail_dir.join(format!("{}.json", Self::cache_key(query)))
+    }
+
+    fn entry_fresh(fetched_at: DateTime<Utc>, ttl_days: i64) -> bool {
+        Utc::now() - fetched_at <= Duration::days(ttl_days)
+    }
+
+    pub fn is_failure_cached(&self, query: &str) -> Result<bool> {
+        let path = self.failure_path(query);
+        if !path.exists() {
+            return Ok(false);
+        }
+        let data = std::fs::read_to_string(&path)
+            .with_context(|| format!("read geocode failure cache {}", path.display()))?;
+        let entry: CachedGeoFailure = serde_json::from_str(&data)?;
+        Ok(Self::entry_fresh(entry.fetched_at, self.ttl_days))
+    }
+
+    fn write_failure(&self, query: &str) -> Result<()> {
+        std::fs::create_dir_all(&self.fail_dir)?;
+        let entry = CachedGeoFailure {
+            fetched_at: Utc::now(),
+        };
+        std::fs::write(
+            self.failure_path(query),
+            serde_json::to_string_pretty(&entry)?,
+        )?;
+        Ok(())
     }
 
     fn read(&self, query: &str) -> Result<Option<GeoPoint>> {
+        self.read_entry(query, false)
+    }
+
+    /// Read cache entry ignoring TTL (fallback when Nominatim is rate-limited).
+    fn read_stale(&self, query: &str) -> Result<Option<GeoPoint>> {
+        self.read_entry(query, true)
+    }
+
+    fn read_entry(&self, query: &str, allow_stale: bool) -> Result<Option<GeoPoint>> {
         let path = self.cache_path(query);
         if !path.exists() {
             return Ok(None);
@@ -111,14 +166,28 @@ impl FileGeocodeCache {
         let data = std::fs::read_to_string(&path)
             .with_context(|| format!("read geocode cache {}", path.display()))?;
         let entry: CachedGeoEntry = serde_json::from_str(&data)?;
-        let age = Utc::now() - entry.fetched_at;
-        if age > Duration::days(self.ttl_days) {
+        if !allow_stale && !Self::entry_fresh(entry.fetched_at, self.ttl_days) {
             return Ok(None);
         }
         Ok(Some(GeoPoint {
             lat: entry.lat,
             lng: entry.lng,
         }))
+    }
+
+    /// Try the query and common place-name suffix variants (e.g. `Denver, CO` → `Denver, CO, USA`).
+    pub fn read_any(&self, query: &str, allow_stale: bool) -> Result<Option<GeoPoint>> {
+        for variant in place_query_variants(query) {
+            let read = if allow_stale {
+                self.read_stale(&variant)?
+            } else {
+                self.read(&variant)?
+            };
+            if read.is_some() {
+                return Ok(read);
+            }
+        }
+        Ok(None)
     }
 
     fn write(&self, query: &str, point: GeoPoint) -> Result<()> {
@@ -132,6 +201,32 @@ impl FileGeocodeCache {
         std::fs::write(&path, serde_json::to_string_pretty(&entry)?)?;
         Ok(())
     }
+}
+
+/// Ordered query variants for cache lookup and Nominatim (broader suffixes after the raw query).
+pub fn place_query_variants(query: &str) -> Vec<String> {
+    let q = query.trim();
+    let mut variants = vec![q.to_string()];
+    let lower = q.to_ascii_lowercase();
+    if !lower.contains("usa")
+        && !lower.contains("united states")
+        && !lower.ends_with(", us")
+    {
+        variants.push(format!("{q}, USA"));
+        variants.push(format!("{q}, US"));
+    }
+    variants.sort();
+    variants.dedup();
+    variants
+}
+
+fn is_rate_limited(err: &anyhow::Error) -> bool {
+    err.to_string().contains("429")
+}
+
+fn is_permanent_geocode_miss(err: &anyhow::Error) -> bool {
+    let msg = err.to_string();
+    msg.contains("no geocode results") && !is_rate_limited(err)
 }
 
 /// Nominatim (OpenStreetMap) geocoder with file cache and rate limiting.
@@ -168,6 +263,33 @@ impl NominatimGeocoder {
     }
 
     async fn fetch_nominatim(&self, query: &str) -> Result<GeoPoint> {
+        self.fetch_nominatim_with_retry(query, 4).await
+    }
+
+    async fn fetch_nominatim_with_retry(&self, query: &str, max_attempts: u32) -> Result<GeoPoint> {
+        let mut last_err = None;
+        for attempt in 0..max_attempts {
+            match self.fetch_nominatim_once(query).await {
+                Ok(point) => return Ok(point),
+                Err(e) if is_rate_limited(&e) => {
+                    last_err = Some(e);
+                    if attempt + 1 < max_attempts {
+                        let wait = StdDuration::from_secs(2u64.pow(attempt + 1));
+                        tracing::warn!(
+                            query,
+                            wait_secs = wait.as_secs(),
+                            "Nominatim rate limit (429); retrying"
+                        );
+                        tokio::time::sleep(wait).await;
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("nominatim request failed for {query}")))
+    }
+
+    async fn fetch_nominatim_once(&self, query: &str) -> Result<GeoPoint> {
         self.throttle();
         let client = reqwest::Client::new();
         let resp = client
@@ -177,6 +299,9 @@ impl NominatimGeocoder {
             .send()
             .await
             .context("nominatim request")?;
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            anyhow::bail!("HTTP status client error (429 Too Many Requests) for nominatim query {query}");
+        }
         let body = resp.error_for_status()?.text().await?;
         let results: Vec<serde_json::Value> = serde_json::from_str(&body)?;
         let first = results
@@ -197,25 +322,70 @@ impl NominatimGeocoder {
 }
 
 impl NominatimGeocoder {
+    /// True when a recent Nominatim miss is cached for this query (skip network retry).
+    pub fn is_failure_cached(&self, query: &str) -> Result<bool> {
+        self.cache.is_failure_cached(query)
+    }
+
     /// Geocode with cache and Nominatim HTTP (async).
     pub async fn geocode_async(&self, query: &str) -> Result<GeoPoint> {
-        if let Some(cached) = self.cache.read(query)? {
+        if let Some(cached) = self.cache.read_any(query, false)? {
             return Ok(cached);
         }
-        let point = self.fetch_nominatim(query).await?;
-        self.cache.write(query, point)?;
-        Ok(point)
+        let variants = place_query_variants(query);
+        if variants
+            .iter()
+            .all(|q| self.cache.is_failure_cached(q).unwrap_or(false))
+        {
+            anyhow::bail!("geocode failure cached for {query}");
+        }
+        match self.fetch_nominatim(query).await {
+            Ok(point) => {
+                self.cache.write(query, point)?;
+                Ok(point)
+            }
+            Err(e) if is_rate_limited(&e) => {
+                if let Some(stale) = self.cache.read_any(query, true)? {
+                    tracing::warn!(
+                        query,
+                        "Using stale geocode cache after Nominatim rate limit"
+                    );
+                    return Ok(stale);
+                }
+                Err(e)
+            }
+            Err(e) => {
+                if is_permanent_geocode_miss(&e) {
+                    let _ = self.cache.write_failure(query);
+                }
+                Err(e)
+            }
+        }
     }
-}
 
-impl Geocoder for NominatimGeocoder {
-    fn geocode(&self, query: &str) -> Result<GeoPoint> {
+    /// Try queries in order; returns the first hit and the query that matched.
+    pub async fn geocode_queries_async(&self, queries: &[String]) -> Result<(GeoPoint, String)> {
+        let mut last_err: Option<anyhow::Error> = None;
+        for query in queries {
+            if query.trim().is_empty() {
+                continue;
+            }
+            match self.geocode_async(query).await {
+                Ok(point) => return Ok((point, query.clone())),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no geocode queries provided")))
+    }
+
+    /// Sync multi-query geocode for matching loops.
+    pub fn geocode_queries(&self, queries: &[String]) -> Result<(GeoPoint, String)> {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(self.geocode_async(query)))
+            tokio::task::block_in_place(|| handle.block_on(self.geocode_queries_async(queries)))
         } else {
             tokio::runtime::Runtime::new()
                 .context("tokio runtime for geocode")?
-                .block_on(self.geocode_async(query))
+                .block_on(self.geocode_queries_async(queries))
         }
     }
 }
@@ -311,6 +481,22 @@ impl<G: Geocoder> CachingGeocoder<G> {
     }
 }
 
+impl Geocoder for NominatimGeocoder {
+    fn geocode(&self, query: &str) -> Result<GeoPoint> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.geocode_async(query)))
+        } else {
+            tokio::runtime::Runtime::new()
+                .context("tokio runtime for geocode")?
+                .block_on(self.geocode_async(query))
+        }
+    }
+
+    fn is_failure_cached(&self, query: &str) -> Result<bool> {
+        self.cache.is_failure_cached(query)
+    }
+}
+
 impl<G: Geocoder> Geocoder for CachingGeocoder<G> {
     fn geocode(&self, query: &str) -> Result<GeoPoint> {
         if let Some(cached) = self.cache.read(query)? {
@@ -325,6 +511,42 @@ impl<G: Geocoder> Geocoder for CachingGeocoder<G> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_place_query_variants_adds_country_suffixes() {
+        let variants = place_query_variants("Denver, CO");
+        assert!(variants.contains(&"Denver, CO".to_string()));
+        assert!(variants.contains(&"Denver, CO, USA".to_string()));
+    }
+
+    #[test]
+    fn test_read_any_finds_suffixed_cache_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = FileGeocodeCache::new(dir.path(), 7);
+        let point = GeoPoint {
+            lat: 39.7392,
+            lng: -104.9903,
+        };
+        std::fs::create_dir_all(&cache.cache_dir).unwrap();
+        let entry = CachedGeoEntry {
+            lat: point.lat,
+            lng: point.lng,
+            fetched_at: Utc::now(),
+        };
+        let path = cache.cache_path("Denver, CO, USA");
+        std::fs::write(path, serde_json::to_string_pretty(&entry).unwrap()).unwrap();
+        let got = cache.read_any("Denver, CO", false).unwrap().unwrap();
+        assert_eq!(got, point);
+    }
+
+    #[test]
+    fn test_geocode_failure_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = FileGeocodeCache::new(dir.path(), 7);
+        assert!(!cache.is_failure_cached("Nowhereville, ZZ").unwrap());
+        cache.write_failure("Nowhereville, ZZ").unwrap();
+        assert!(cache.is_failure_cached("Nowhereville, ZZ").unwrap());
+    }
 
     #[test]
     fn test_haversine_chicago_evanston() {

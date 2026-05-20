@@ -1,9 +1,9 @@
 <!--
   Pepper CRM Dashboard Page
 
-    Main web UI: stats, reconnects due, pending tasks, and next-week travel matches.
+    Main web UI: travel, tasks, reconnects, random picks, and upcoming birthdays.
 
-  INPUT: Tera context from main.rs — tasks, reconnects, travel_trips, counts, flash flags, snooze options.
+  INPUT: Tera context from main.rs — tasks, reconnects, travel_trips, birthdays, counts, flash flags.
   OUTPUT: Full HTML page with header partial, sections, and snooze.js for in-page updates.
   NOTES: Travel list requires manual refresh; snooze forms POST to /travel/snooze.
 
@@ -28,6 +28,10 @@
 
         <div class="stats">
             <div class="stat-card">
+                <div class="stat-number" id="stat-travel-count">{% if travel_ready %}{{ travel_match_count }}{% else %}0{% endif %}</div>
+                <div class="stat-label">Travel Matches</div>
+            </div>
+            <div class="stat-card">
                 <div class="stat-number">{{ task_count }}</div>
                 <div class="stat-label">Pending Tasks</div>
             </div>
@@ -36,19 +40,132 @@
                 <div class="stat-label">Reconnects Due</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number" id="stat-travel-count">{% if travel_ready %}{{ travel_match_count }}{% else %}0{% endif %}</div>
-                <div class="stat-label">Travel Matches</div>
+                <div class="stat-number">{{ birthday_count }}</div>
+                <div class="stat-label">Upcoming Birthdays</div>
             </div>
+        </div>
+
+        <div class="section section-travel">
+            <div class="section-header">
+                <h2>Next Week Travel</h2>
+                {% if travel_ready %}
+                <span class="badge-live">Updated {{ travel_built_at }}</span>
+                {% endif %}
+            </div>
+            <p class="section-desc">
+                Metro-area matching from VCF addresses.
+                Calendar event title is geocoded for each trip.
+                Rebuild once per week or on demand — not on every page load.
+                Contacts with <code>Reconnect: Never</code> are excluded.
+                Only shown if their <code>Reconnect:</code> interval is due (from vCard <code>REV</code>, or latest <code>Month YYYY:</code> note).
+            </p>
+
+            <p class="travel-cache-note">
+                Calendar and contact changes are <strong>not</strong> picked up automatically.
+                Click refresh after you edit Google Calendar or your VCF export.
+            </p>
+
+            {% if travel_just_refreshed %}
+            <p class="travel-flash travel-flash-ok">Travel list rebuilt from calendar + contacts.</p>
+            {% endif %}
+            {% if travel_snoozed %}
+            <p class="travel-flash travel-flash-ok">Reconnect updated on contact — removed from this week's list.</p>
+            {% endif %}
+            {% if travel_refresh_error %}
+            <p class="travel-flash travel-flash-err">Refresh failed — check server logs for details.</p>
+            {% endif %}
+
+            <form method="post" action="/travel/refresh" class="travel-refresh-form">
+                <label class="travel-location-label" for="search_location">
+                    Search location
+                    <input
+                        type="text"
+                        id="search_location"
+                        name="search_location"
+                        class="travel-location-input"
+                        value="{{ travel_search_location }}"
+                        placeholder="e.g. Chicago, IL — leave blank for all calendar trips"
+                    />
+                </label>
+                <label class="travel-radius-label" for="metro_radius_mi">
+                    Metro radius (miles)
+                    <input
+                        type="number"
+                        id="metro_radius_mi"
+                        name="metro_radius_mi"
+                        class="travel-radius-input"
+                        value="{{ metro_radius_mi }}"
+                        min="{{ metro_radius_min }}"
+                        max="{{ metro_radius_max }}"
+                        step="1"
+                        required
+                    />
+                </label>
+                <button type="submit" class="btn-refresh">Refresh travel matches</button>
+            </form>
+
+            {% if travel_ready %}
+            <p class="travel-week-meta">
+                Target week: {{ travel_week_label }}
+                · matched within {{ metro_radius_mi }} mi
+                {% if travel_search_near != "" %}
+                · near {{ travel_search_near }}
+                {% endif %}
+            </p>
+            {% for trip in travel_trips %}
+            <div class="travel-trip">
+                <div class="travel-city">{{ trip.title }} · {{ trip.date_range }}</div>
+                {% if trip.matches | length > 0 %}
+                <ul class="travel-match-list">
+                    {% for match in trip.matches %}
+                    <li class="travel-match" data-snooze-row data-counter="travel">
+                        <div class="travel-match-main">
+                            <div class="travel-match-name">{{ match.full_name }}</div>
+                            <div class="travel-match-detail">{{ match.detail }}</div>
+                        </div>
+                        <form method="post" action="/travel/snooze" class="travel-snooze-form">
+                            <input type="hidden" name="uid" value="{{ match.uid }}">
+                            <label class="travel-snooze-label" for="snooze-{{ match.uid }}">Reconnect</label>
+                            <select id="snooze-{{ match.uid }}" name="reconnect" class="travel-snooze-select" required>
+                                <option value="" disabled selected>Reconnect…</option>
+                                {% for opt in reconnect_snooze_options %}
+                                <option value="{{ opt.value }}">{{ opt.label }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn-snooze">Set</button>
+                        </form>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="travel-no-matches">No contacts within metro radius for this trip.</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="empty-state">
+                <p>{{ travel_error }}</p>
+            </div>
+            {% endif %}
         </div>
 
         <div class="section">
             <div class="section-header">
-                <h2>Random Person of the Week</h2>
+                <h2>Pending Tasks</h2>
             </div>
-            <p class="section-desc">One contact picked at random each week for serendipitous reconnection and web enrichment.</p>
+            <p class="section-desc">Open <code>TODO:</code> items from your contact cards (synced from VCF → PostgreSQL).</p>
+            {% if task_count > 0 %}
+            {% for task in tasks %}
+            <div class="list-item">
+                <div class="list-item-name">{{ task.contact_name }}</div>
+                <div class="list-item-detail">TODO: {{ task.description }}</div>
+            </div>
+            {% endfor %}
+            {% else %}
             <div class="empty-state">
-                <p>Not available yet.</p>
+                <p>No pending tasks.</p>
             </div>
+            {% endif %}
         </div>
 
         <div class="section">
@@ -90,109 +207,117 @@
 
         <div class="section">
             <div class="section-header">
-                <h2>Pending Tasks</h2>
+                <h2>Random People of the Week</h2>
+                {% if random_can_shuffle %}
+                <form method="post" action="/random/shuffle" class="random-shuffle-form">
+                    <button type="submit" class="btn-shuffle">Shuffle 3 new</button>
+                </form>
+                {% endif %}
             </div>
-            <p class="section-desc">Open <code>TODO:</code> items from your contact cards (synced from VCF → PostgreSQL).</p>
-            {% if task_count > 0 %}
-            {% for task in tasks %}
-            <div class="list-item">
-                <div class="list-item-name">{{ task.contact_name }}</div>
-                <div class="list-item-detail">TODO: {{ task.description }}</div>
-            </div>
-            {% endfor %}
+            {% if random_just_shuffled %}
+            <p class="travel-flash travel-flash-ok">Three new random contacts picked.</p>
+            {% endif %}
+            {% if random_category_saved %}
+            <p class="travel-flash travel-flash-ok">Contact categories updated on vCard.</p>
+            {% endif %}
+            <p class="section-desc">
+                Three contacts picked at random for the week of {{ random_week_label }} — a nudge to remember people
+                and fill in missing details. Use the Reconnect dropdown to write <code>CATEGORIES</code> on the vCard.
+                Excludes <code>Venue/Business</code> and <code>Do Not Engage</code>; <code>Reconnect: Never</code> is eligible.
+                {% if random_shuffled %}
+                You shuffled this week’s list — click <strong>Shuffle 3 new</strong> again for another draw, or wait until Monday for the default weekly set.
+                {% else %}
+                Default picks stay the same until next Monday; use shuffle anytime for a fresh trio.
+                {% endif %}
+            </p>
+            {% if random_pick_count > 0 %}
+            <ul class="random-pick-list">
+                {% for pick in random_picks %}
+                <li class="random-pick-card">
+                    <div class="random-pick-name">{{ pick.full_name }}</div>
+                    <div class="random-pick-meta">
+                        {% if pick.org != "" %}
+                        <span>{{ pick.org }}</span>
+                        {% endif %}
+                        {% if pick.location != "" %}
+                        <span>{{ pick.location }}</span>
+                        {% endif %}
+                    </div>
+                    {% if pick.categories != "" %}
+                    <div class="random-pick-field">
+                        <span class="random-pick-label">Categories</span>
+                        <span class="random-pick-value">{{ pick.categories }}</span>
+                    </div>
+                    {% endif %}
+                    {% if pick.linkedin_url != "" %}
+                    <p class="random-pick-on-card">LinkedIn on card: {{ pick.linkedin_url }}</p>
+                    {% endif %}
+                    {% if pick.note != "" %}
+                    <div class="random-pick-field random-pick-note-block">
+                        <span class="random-pick-label">Notes</span>
+                        <pre class="random-pick-note-full">{{ pick.note }}</pre>
+                    </div>
+                    {% endif %}
+                    <div class="random-pick-contact-lines">
+                        {% if pick.email != "" %}
+                        <div><span class="random-pick-label">Email</span> {{ pick.email }}</div>
+                        {% endif %}
+                        {% if pick.phone != "" %}
+                        <div><span class="random-pick-label">Phone</span> {{ pick.phone }}</div>
+                        {% endif %}
+                    </div>
+                    <form method="post" action="/random/category" class="random-pick-category-form">
+                        <input type="hidden" name="uid" value="{{ pick.uid }}">
+                        <label class="travel-snooze-label" for="random-reconnect-{{ pick.uid }}">Reconnect</label>
+                        <select id="random-reconnect-{{ pick.uid }}" name="reconnect" class="travel-snooze-select" required>
+                            <option value="" disabled selected>Reconnect…</option>
+                            {% for opt in random_pick_category_options %}
+                            <option value="{{ opt.value }}">{{ opt.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn-snooze">Set</button>
+                    </form>
+                </li>
+                {% endfor %}
+            </ul>
+            <p class="random-pick-footnote">
+                {{ random_eligible_count }} eligible contact{% if random_eligible_count != 1 %}s{% endif %} in your book
+                {% if random_fewer_than_target %} (showing {{ random_pick_count }} — add more people to get three picks){% endif %}.
+            </p>
             {% else %}
             <div class="empty-state">
-                <p>No pending tasks.</p>
+                <p>No eligible contacts to pick from. Add people to your VCF export (excluding venues and <code>Do Not Engage</code>).</p>
             </div>
             {% endif %}
         </div>
 
-        <div class="section section-travel">
+        <div class="section">
             <div class="section-header">
-                <h2>Next Week Travel</h2>
-                {% if travel_ready %}
-                <span class="badge-live">Updated {{ travel_built_at }}</span>
-                {% endif %}
+                <h2>Upcoming Birthdays</h2>
             </div>
             <p class="section-desc">
-                Metro-area matching from VCF addresses.
-                Calendar event title is geocoded for each trip.
-                Rebuild once per week or on demand — not on every page load.
-                Contacts with <code>Reconnect: Never</code> are excluded.
-                Only shown if their <code>Reconnect:</code> interval is due (from vCard <code>REV</code>, or latest <code>Month YYYY:</code> note).
+                Birthdays in the next {{ birthday_window_days }} days from vCard <code>BDAY</code>
+                (e.g. <code>1990-05-21</code> or <code>--0521</code>).
+                Excludes <code>Do Not Engage</code>; includes <code>Reconnect: Never</code>.
             </p>
-
-            <p class="travel-cache-note">
-                Calendar and contact changes are <strong>not</strong> picked up automatically.
-                Click refresh after you edit Google Calendar or your VCF export.
-            </p>
-
-            {% if travel_just_refreshed %}
-            <p class="travel-flash travel-flash-ok">Travel list rebuilt from calendar + contacts.</p>
-            {% endif %}
-            {% if travel_snoozed %}
-            <p class="travel-flash travel-flash-ok">Reconnect snooze saved to contact — removed from this week's list.</p>
-            {% endif %}
-            {% if travel_refresh_error %}
-            <p class="travel-flash travel-flash-err">Refresh failed — check server logs for details.</p>
-            {% endif %}
-
-            <form method="post" action="/travel/refresh" class="travel-refresh-form">
-                <label class="travel-radius-label" for="metro_radius_mi">
-                    Metro radius (miles)
-                    <input
-                        type="number"
-                        id="metro_radius_mi"
-                        name="metro_radius_mi"
-                        class="travel-radius-input"
-                        value="{{ metro_radius_mi }}"
-                        min="{{ metro_radius_min }}"
-                        max="{{ metro_radius_max }}"
-                        step="1"
-                        required
-                    />
-                </label>
-                <button type="submit" class="btn-refresh">Refresh travel matches</button>
-            </form>
-
-            {% if travel_ready %}
-            <p class="travel-week-meta">
-                Target week: {{ travel_week_label }}
-                · matched within {{ metro_radius_mi }} mi
-            </p>
-            {% for trip in travel_trips %}
-            <div class="travel-trip">
-                <div class="travel-city">{{ trip.title }} · {{ trip.date_range }}</div>
-                {% if trip.matches | length > 0 %}
-                <ul class="travel-match-list">
-                    {% for match in trip.matches %}
-                    <li class="travel-match" data-snooze-row data-counter="travel">
-                        <div class="travel-match-main">
-                            <div class="travel-match-name">{{ match.full_name }}</div>
-                            <div class="travel-match-detail">{{ match.detail }}</div>
-                        </div>
-                        <form method="post" action="/travel/snooze" class="travel-snooze-form">
-                            <input type="hidden" name="uid" value="{{ match.uid }}">
-                            <label class="travel-snooze-label" for="snooze-{{ match.uid }}">Snooze</label>
-                            <select id="snooze-{{ match.uid }}" name="reconnect" class="travel-snooze-select" required>
-                                <option value="" disabled selected>Reconnect…</option>
-                                {% for opt in reconnect_snooze_options %}
-                                <option value="{{ opt.value }}">{{ opt.label }}</option>
-                                {% endfor %}
-                            </select>
-                            <button type="submit" class="btn-snooze">Set</button>
-                        </form>
-                    </li>
-                    {% endfor %}
-                </ul>
-                {% else %}
-                <p class="travel-no-matches">No contacts within metro radius for this trip.</p>
-                {% endif %}
+            {% if birthday_count > 0 %}
+            {% for bday in birthdays %}
+            <div class="list-item list-item-row">
+                <div class="travel-match-main">
+                    <div class="list-item-name">{{ bday.contact_name }}</div>
+                    <div class="list-item-detail">
+                        {{ bday.date_label }}
+                        · {{ bday.when_label }}
+                        {% if bday.age_label != "" %}
+                        · {{ bday.age_label }}
+                        {% endif %}
+                    </div>
+                </div>
             </div>
             {% endfor %}
             {% else %}
             <div class="empty-state">
-                <p>{{ travel_error }}</p>
+                <p>No birthdays in the next {{ birthday_window_days }} days. Add <code>BDAY</code> to contact cards to see them here.</p>
             </div>
             {% endif %}
         </div>

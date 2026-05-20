@@ -43,7 +43,8 @@ Living summary of what's built vs. planned. For setup and usage, see [`README.md
 - Parses vCard 2.1/3.0/4.0 with line unfolding
 - Time-based reconnects (`N days/weeks/months/years`)
 - Trip triggers (`before Chicago trip`)
-- `Reconnect: Never` exclusion
+- `Reconnect: Never` — excludes Reconnects Due + travel; eligible for Random Person
+- `Do Not Engage` — excludes all Pepper surfaces (`is_do_not_engage()`)
 - Due-date anchoring from `REV` or `Month YYYY:` notes
 - Append-only CRM log (`--- CRM Log ---`)
 - Last `Reconnect:` tag wins
@@ -76,7 +77,7 @@ All servers use stdio transport via `rmcp`:
 | Next Week Travel (calendar + geo + metro match) | ✅ |
 | Travel refresh on demand | ✅ |
 | Reconnect snooze (VCF write-back) | ✅ |
-| Random Person of the Week | 🔜 |
+| Random People of the Week (3 picks, manual discovery links) | ✅ partial |
 | Contacts browse page | — removed (VCF is source of truth) |
 
 ### Infrastructure
@@ -97,7 +98,7 @@ All servers use stdio transport via `rmcp`:
 | CardDAV read/write | Stubbed for Pi production |
 | HTTP/SSE MCP transport | stdio only today |
 | Matrix bot | Future chat interface |
-| Random Person + web enrichment | Spec in `DASHBOARD_SECTIONS.md` |
+| Random Person API enrichment (auto-suggest URLs) | Spec in `DASHBOARD_SECTIONS.md` — dashboard has search/mailto links only |
 | Travel section in weekly digest email | Dashboard only for now |
 | Mark tasks done from UI | Tasks sync from VCF only |
 | AI contact enrichment | Out of prototype scope |
@@ -159,5 +160,7 @@ CATEGORIES:Reconnect: 3 months
 ```
 
 Also supports trip triggers (`before Chicago trip`), `Reconnect: Never`, and legacy `Reconnect:` lines in `NOTE`.
+
+**Engagement categories** ([`README.md`](README.md#engagement-categories-in-categories)): `is_reconnect_never()`, `is_do_not_engage()` in `tags.rs`; wired through travel, random pick, due reconnects, DB sync, and dashboard task list.
 
 Due dates anchor from vCard `REV` or latest `Month YYYY:` note line.

@@ -29,6 +29,15 @@ pub struct IcsEvent {
     pub end: NaiveDate,
 }
 
+/// Monday–Sunday range for the ISO week containing `as_of`.
+pub fn week_range_containing(as_of: NaiveDate) -> (NaiveDate, NaiveDate) {
+    let weekday = as_of.weekday();
+    let days_from_monday = weekday.num_days_from_monday();
+    let monday = as_of - chrono::Duration::days(days_from_monday as i64);
+    let sunday = monday + chrono::Duration::days(6);
+    (monday, sunday)
+}
+
 /// Monday–Sunday range for the calendar week after the week containing `as_of`.
 pub fn next_week_range(as_of: NaiveDate) -> (NaiveDate, NaiveDate) {
     let weekday = as_of.weekday();

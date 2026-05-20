@@ -17,7 +17,8 @@
 
 use crate::models::*;
 use crate::tags::{
-    is_city_trigger, is_reconnect_never, reconnect_due_date, resolve_reconnect_tag,
+    is_city_trigger, is_do_not_engage, is_reconnect_never, reconnect_due_date,
+    resolve_reconnect_tag,
 };
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
@@ -206,7 +207,11 @@ pub async fn upsert_contacts_batch(pool: &PgPool, contacts: &[Contact]) -> Resul
     for contact in contacts {
         let contact_id = upsert_contact(pool, contact).await?;
         contacts_upserted += 1;
-        
+
+        if is_do_not_engage(&contact.categories) {
+            continue;
+        }
+
         // Upsert tasks
         for todo_body in &contact.todos {
             upsert_task(pool, contact_id, todo_body).await?;

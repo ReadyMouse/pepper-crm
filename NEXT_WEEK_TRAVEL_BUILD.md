@@ -10,7 +10,7 @@ OUTPUT:
   - Weekly travel snapshot in .cache/travel/, dashboard display spec
 
 NOTES:
-  - Reconnect: lives in CATEGORIES; Reconnect: Never is hard-filtered.
+  - Reconnect: lives in CATEGORIES; Reconnect: Never and Do Not Engage are hard-filtered from travel.
 
 Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 -->
@@ -29,7 +29,9 @@ Implementation guide for the **Next Week Travel** dashboard section. Product spe
 
 3. **Refresh cadence.** Rebuild the list **once per calendar week** (scheduled job / first `pepper` run of the week) **or on explicit request** from the web UI (e.g. “Refresh travel matches”). **Do not** auto-refresh on a daily timer, on every page load, or on a background daily cron.
 
-4. **Exclude `Reconnect: Never`.** Never include a contact in travel matches (or, by extension, other “suggest people” surfaces) if their vCard **CATEGORIES** contains `Reconnect: Never`. This is a hard filter applied before geo matching.
+4. **Exclude engagement categories from travel.** Hard-filter before geo matching:
+   - `Reconnect: Never` — close contacts; no travel-time meetup nudges (they may still appear in Random Person of the Week).
+   - `Do Not Engage` — never surface in any Pepper list (see [`README.md`](README.md#engagement-categories-in-categories)).
 
 5. **`Reconnect:` lives in CATEGORIES.** Reconnect scheduling and trip triggers (`Reconnect: 3 months`, `Reconnect: before Chicago trip`, `Reconnect: Never`, etc.) are stored as **category values** on the vCard, not in `NOTE`. The `NOTE` field remains for freeform notes, `TODO:` lines, and the CRM log. Legacy `Reconnect:` lines in `NOTE` may still be read as a fallback until contacts are migrated.
 
@@ -127,7 +129,8 @@ In this project, **`Reconnect: …` is a vCard category**, not a `NOTE` line. Ea
 |----------------|---------|
 | `Reconnect: 3 months` | Timed follow-up (synced to Postgres `reconnects` on VCF sync) |
 | `Reconnect: before Chicago trip` | Deferred — boost when Chicago trip detected |
-| `Reconnect: Never` | **Exclude** from travel matches and random-person picks |
+| `Reconnect: Never` | **Exclude** from travel matches and Reconnects Due; **include** in Random Person of the Week |
+| `Do Not Engage` | **Exclude** from all Pepper surfaces (contact stays in VCF) |
 
 **VCF examples:**
 
@@ -143,6 +146,10 @@ CATEGORIES:Reconnect: before Chicago trip
 CATEGORIES:Reconnect: Never
 ```
 
+```vcf
+CATEGORIES:Do Not Engage
+```
+
 Multiple categories (comma-separated) are allowed; only one `Reconnect:` category should be active — **last `Reconnect:` category wins** (same rule as today’s last `Reconnect:` line in `NOTE`).
 
 **Parser work required:**
@@ -150,7 +157,7 @@ Multiple categories (comma-separated) are allowed; only one `Reconnect:` categor
 - `vcard.rs`: parse `CATEGORIES` (and `CATEGORY` if present) into `categories: Vec<String>`.
 - `tags.rs`: add `parse_reconnect_category(categories: &[String]) -> Option<String>` — strip `Reconnect: ` prefix, return body (e.g. `3 months`, `before Chicago trip`, `Never`).
 - `Contact.reconnect_tag`: populate from **categories first**, then fall back to `NOTE` for legacy test VCFs.
-- Helpers: `is_reconnect_never()`, `is_city_trigger()` — operate on the resolved reconnect body.
+- Helpers: `is_reconnect_never()`, `is_do_not_engage()`, `is_city_trigger()` — operate on categories / reconnect body.
 
 **TODO tags** stay in `NOTE` for now (`TODO: …` lines). Only `Reconnect:` moves to categories.
 
@@ -163,7 +170,7 @@ On each **build** (not on every page view):
 1. `parse_vcards_from_dir(CONTACTS_DIR)`.
 2. For each contact:
    - Resolve **reconnect** from `CATEGORIES` (fallback: `NOTE`).
-   - **Filter out** if reconnect body is `Never` (category `Reconnect: Never`).
+   - **Filter out** if reconnect body is `Never` (category `Reconnect: Never`) or category is `Do Not Engage`.
    - Use **`ADR`** for city (and state/country when present) for geocoding query string, e.g. `"Evanston, IL"`.
    - Use reconnect body `before [city] trip` (`is_city_trigger`) for **ranking boost** when city fuzzy-matches the trip title.
 
@@ -402,4 +409,5 @@ GEOCODE_CACHE_TTL_DAYS=7
 | Calendar auth v1? | Secret ICS URL only |
 | Refresh on page load? | **No** — snapshot or manual refresh |
 | Where do `Reconnect:` tags live? | **`CATEGORIES`** (primary); `NOTE` legacy fallback |
-| `Reconnect: Never`? | Category `Reconnect: Never` — hard exclude |
+| `Reconnect: Never`? | Category `Reconnect: Never` — exclude from travel + Reconnects Due; eligible for Random Person |
+| `Do Not Engage`? | Category `Do Not Engage` — exclude from all surfaces |

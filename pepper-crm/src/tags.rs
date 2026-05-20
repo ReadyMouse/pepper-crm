@@ -10,7 +10,8 @@
 //!   - Due dates, reconnect lists, log append strings, and travel-match eligibility booleans.
 //!
 //! NOTES:
-//!   - City triggers (`before … trip`) defer interval math; `Never` and venue cards are excluded.
+//!   - City triggers (`before … trip`) defer interval math; `Never` skips timed reconnect/travel only.
+//!   - `Do Not Engage` excludes a contact from all Pepper surfaces; venue cards are never people.
 //!   - `TRAVEL_INTERACTION_WINDOW_MONTHS` (18) gates stale contacts from travel lists.
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
@@ -23,6 +24,9 @@ pub const CRM_LOG_SEPARATOR: &str = "--- CRM Log ---";
 
 /// Prefix for reconnect values in vCard `CATEGORIES`.
 pub const RECONNECT_CATEGORY_PREFIX: &str = "Reconnect:";
+
+/// vCard category: omit from all Pepper surfaces (contact stays in VCF).
+pub const DO_NOT_ENGAGE_CATEGORY: &str = "Do Not Engage";
 
 /// Parse all TODO: tags from the note field (above the CRM Log separator)
 pub fn parse_todos(note: &str) -> Vec<String> {
@@ -107,6 +111,13 @@ pub fn parse_reconnect_category(categories: &[String]) -> Option<String> {
 /// Resolve reconnect from categories first, then legacy `NOTE` lines.
 pub fn resolve_reconnect_tag(categories: &[String], note: &str) -> Option<String> {
     parse_reconnect_category(categories).or_else(|| parse_reconnect_tag(note))
+}
+
+/// True when `CATEGORIES` contains `Do Not Engage`.
+pub fn is_do_not_engage(categories: &[String]) -> bool {
+    categories
+        .iter()
+        .any(|c| c.trim().eq_ignore_ascii_case(DO_NOT_ENGAGE_CATEGORY))
 }
 
 /// True when reconnect body is `Never` or categories contain `Reconnect: Never`.
@@ -258,18 +269,22 @@ pub fn is_reconnect_due_for_travel(
     }
 }
 
-/// Preset bodies for `CATEGORIES: Reconnect: …` (travel snooze dropdown).
+/// Preset category choices for reconnect/snooze dropdowns (travel, reconnects due, random picks).
 pub const RECONNECT_SNOOZE_OPTIONS: &[&str] = &[
     "1 week",
     "1 month",
-    "2 months",
+    "3 months",
     "6 months",
     "Never",
+    DO_NOT_ENGAGE_CATEGORY,
 ];
 
+/// Alias kept for call sites that name the random-pick dropdown explicitly.
+pub const RANDOM_PICK_CATEGORY_OPTIONS: &[&str] = RECONNECT_SNOOZE_OPTIONS;
+
 /// Contacts with a timed `Reconnect:` interval due on or before `as_of + window_days`.
-/// Uses vCard `REV` (or latest past `Month YYYY:` note) as the anchor. Excludes Never,
-/// city triggers, and venue/business cards.
+/// Uses vCard `REV` (or latest past `Month YYYY:` note) as the anchor. Excludes
+/// `Do Not Engage`, `Reconnect: Never`, city triggers, and venue/business cards.
 pub fn due_reconnects_from_contacts(
     contacts: &[crate::models::Contact],
     as_of: NaiveDate,
@@ -279,6 +294,9 @@ pub fn due_reconnects_from_contacts(
     let mut out = Vec::new();
 
     for contact in contacts {
+        if is_do_not_engage(&contact.categories) {
+            continue;
+        }
         if is_reconnect_never(&contact.categories, contact.reconnect_tag.as_deref()) {
             continue;
         }
@@ -326,8 +344,20 @@ pub fn due_reconnects_from_contacts(
     out
 }
 
+/// Whether a contact may appear in the weekly random-pick spotlight (people only).
+/// `Reconnect: Never` is eligible; `Do Not Engage` and venues are not.
+pub fn is_random_pick_eligible(contact: &crate::models::Contact) -> bool {
+    if is_do_not_engage(&contact.categories) {
+        return false;
+    }
+    !is_venue_contact(contact)
+}
+
 /// Whether a contact should appear in weekly travel match lists.
 pub fn is_travel_match_eligible(contact: &crate::models::Contact, as_of: NaiveDate) -> bool {
+    if is_do_not_engage(&contact.categories) {
+        return false;
+    }
     if is_reconnect_never(&contact.categories, contact.reconnect_tag.as_deref()) {
         return false;
     }
@@ -525,6 +555,13 @@ mod tests {
     }
 
     #[test]
+    fn test_is_do_not_engage() {
+        assert!(is_do_not_engage(&["Do Not Engage".into()]));
+        assert!(is_do_not_engage(&["do not engage".into()]));
+        assert!(!is_do_not_engage(&["Work".into()]));
+    }
+
+    #[test]
     fn test_extract_trip_city() {
         assert_eq!(
             extract_trip_city("before Chicago trip"),
@@ -605,6 +642,7 @@ mod tests {
             full_name: name.into(),
             email: None,
             phone: None,
+            urls: vec![],
             org: None,
             city: None,
             state: None,
@@ -615,6 +653,7 @@ mod tests {
             note_raw: String::new(),
             todos: vec![],
             reconnect_tag: None,
+            birthday: None,
             rev: None,
             log_entries: vec![],
             vcf_path: "x.vcf".into(),
@@ -664,6 +703,43 @@ mod tests {
     }
 
     #[test]
+    fn test_is_random_pick_eligible() {
+        let mut c = sample_contact("p1", "Friend");
+        assert!(is_random_pick_eligible(&c));
+
+        c.categories = vec!["Reconnect: Never".into()];
+        assert!(is_random_pick_eligible(&c));
+
+        c.categories = vec!["Do Not Engage".into()];
+        assert!(!is_random_pick_eligible(&c));
+
+        c.categories = vec!["Venue/Business".into()];
+        c.full_name = "Cafe".into();
+        assert!(!is_random_pick_eligible(&c));
+    }
+
+    #[test]
+    fn test_due_reconnects_excludes_do_not_engage_and_never() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 19).unwrap();
+        let mut due_soon = sample_contact("u1", "Alex");
+        due_soon.categories = vec!["Reconnect: 1 week".into()];
+        due_soon.reconnect_tag = Some("1 week".into());
+        due_soon.rev = Some(NaiveDate::from_ymd_opt(2026, 5, 15).unwrap());
+
+        let mut never = sample_contact("u2", "Mom");
+        never.categories = vec!["Reconnect: Never".into()];
+
+        let mut dne = sample_contact("u3", "Blocked");
+        dne.categories = vec!["Reconnect: 1 week".into(), "Do Not Engage".into()];
+        dne.reconnect_tag = Some("1 week".into());
+        dne.rev = Some(NaiveDate::from_ymd_opt(2026, 5, 15).unwrap());
+
+        let list = due_reconnects_from_contacts(&[due_soon, never, dne], as_of, 7);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].full_name, "Alex");
+    }
+
+    #[test]
     fn test_is_venue_contact() {
         let as_of = NaiveDate::from_ymd_opt(2026, 5, 19).unwrap();
         let mut c = crate::models::Contact {
@@ -671,6 +747,7 @@ mod tests {
             full_name: "Venue: Metro".into(),
             email: None,
             phone: None,
+            urls: vec![],
             org: None,
             city: Some("Boston".into()),
             state: Some("MA".into()),
@@ -681,6 +758,7 @@ mod tests {
             note_raw: "May 2025: Regular spot.".into(),
             todos: vec![],
             reconnect_tag: None,
+            birthday: None,
             rev: None,
             log_entries: vec![],
             vcf_path: "x.vcf".into(),

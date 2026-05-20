@@ -218,11 +218,49 @@ Supported values:
 
 - **Timed intervals** — `1 week`, `3 months`, `1 year`, etc.
 - **Trip triggers** — `before Chicago trip` (matched when you travel there)
-- **Opt out** — `Reconnect: Never` (excluded from travel suggestions)
+- **No timed reconnect** — `Reconnect: Never` (see [Engagement categories](#engagement-categories-in-categories) below)
 
 Legacy `Reconnect:` lines in `NOTE` are still read as a fallback.
 
 Due dates anchor from vCard `REV` or the latest `Month YYYY:` note line (e.g. `May 2026: Had coffee`).
+
+### Engagement categories (in `CATEGORIES`)
+
+Two category values control **where** a contact may surface. They are separate from timed `Reconnect:` tags (a card may have both).
+
+#### `Reconnect: Never`
+
+People you stay close to without needing a “text them soon” nudge — e.g. family, partners, daily colleagues. You do **not** want interval-based reconnect reminders for them.
+
+```
+CATEGORIES:Reconnect: Never
+```
+
+| Surface | Included? |
+|---------|-----------|
+| Reconnects Due | No |
+| Next Week Travel | No |
+| Random Person of the Week | Yes |
+| Birthday reminders (planned) | Yes |
+| General contact search / browse | Yes |
+
+#### `Do Not Engage`
+
+People you never want suggested or surfaced, but you still want the vCard on file (not deleted).
+
+```
+CATEGORIES:Do Not Engage
+```
+
+| Surface | Included? |
+|---------|-----------|
+| Reconnects Due | No |
+| Next Week Travel | No |
+| Random Person of the Week | No |
+| Birthday reminders | No |
+| Any Pepper search or suggestion list | No |
+
+The contact remains in your VCF export; Pepper simply omits them from all proactive surfaces.
 
 ### CRM log (append-only)
 

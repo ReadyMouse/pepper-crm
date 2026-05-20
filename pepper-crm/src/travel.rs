@@ -11,6 +11,8 @@
 //!
 //! NOTES:
 //!   - Returns cached snapshot unless `force` is set; requires recent interaction anchor on contacts.
+//!   - Interactive refresh sets `ensure_contact_geo = false` (use existing vCard GEO only).
+//!   - Weekly `pepper` run sets `ensure_contact_geo = true` to geocode missing/stale contacts.
 //!   - `build_travel_week_snapshot_with_geocoder` is for tests with injected `FixedGeocoder`.
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
@@ -27,7 +29,9 @@ use crate::tags::{
     city_fuzzy_matches_trip, extract_trip_city, is_city_trigger, is_travel_match_eligible,
 };
 use crate::travel_cache::{save_snapshot, target_week_for_build};
-use crate::vcard::{contact_address_query, parse_vcards_from_dir};
+use crate::vcard::{
+    contact_address_query, geocode_queries_for_contact, parse_vcards_from_dir,
+};
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
 use std::path::PathBuf;
@@ -43,8 +47,13 @@ pub struct TravelBuildConfig {
     pub metro_radius_km: f64,
     pub as_of: NaiveDate,
     pub force: bool,
+    /// When true, geocode missing/stale contacts before matching (weekly scan). When false, use
+    /// existing vCard GEO only (interactive dashboard refresh).
+    pub ensure_contact_geo: bool,
     /// When true, missing/stale GEO is written back to vCard files (default on).
     pub write_geo_to_vcf: bool,
+    /// When set, match contacts near this place instead of all calendar trips.
+    pub search_location: Option<String>,
 }
 
 impl TravelBuildConfig {
@@ -80,7 +89,9 @@ impl TravelBuildConfig {
             metro_radius_km,
             as_of,
             force: false,
+            ensure_contact_geo: true,
             write_geo_to_vcf,
+            search_location: None,
         }
     }
 }
@@ -119,9 +130,11 @@ async fn build_travel_week_snapshot_async(
     }
 
     let ics = resolve_ics_content_async(config).await?;
-    let trips = trips_for_next_week(&ics, config.as_of)?;
+    let trips = resolve_trips_for_build(config, &ics)?;
     let mut contacts = parse_vcards_from_dir(&config.contacts_dir)?;
-    ensure_contacts_geocoded(&mut contacts, geocoder, config.write_geo_to_vcf).await?;
+    if config.ensure_contact_geo && contacts.iter().any(needs_geocoding) {
+        ensure_contacts_geocoded(&mut contacts, geocoder, config.write_geo_to_vcf).await?;
+    }
 
     let mut trip_results = Vec::new();
     for trip in trips {
@@ -131,6 +144,7 @@ async fn build_travel_week_snapshot_async(
             geocoder,
             config.metro_radius_km,
             config.as_of,
+            config.ensure_contact_geo,
         )
         .await?;
         trip_results.push(TravelTripWithMatches {
@@ -147,6 +161,7 @@ async fn build_travel_week_snapshot_async(
         week_end,
         built_at: Utc::now(),
         metro_radius_km: config.metro_radius_km,
+        search_location: config.search_location.clone(),
         trips: trip_results,
     };
 
@@ -185,14 +200,22 @@ pub fn build_travel_week_snapshot_with_geocoder<G: Geocoder>(
         Some(c) => c.clone(),
         None => anyhow::bail!("ics_content required for sync geocoder test builds"),
     };
-    let trips = trips_for_next_week(&ics, config.as_of)?;
+    let trips = resolve_trips_for_build(config, &ics)?;
     let mut contacts = parse_vcards_from_dir(&config.contacts_dir)?;
-    ensure_contacts_geocoded_sync(&mut contacts, geocoder, config.write_geo_to_vcf)?;
+    if config.ensure_contact_geo && contacts.iter().any(needs_geocoding) {
+        ensure_contacts_geocoded_sync(&mut contacts, geocoder, config.write_geo_to_vcf)?;
+    }
 
     let mut trip_results = Vec::new();
     for trip in trips {
-        let matches =
-            match_contacts_for_trip(&trip, &contacts, geocoder, config.metro_radius_km, config.as_of)?;
+        let matches = match_contacts_for_trip(
+            &trip,
+            &contacts,
+            geocoder,
+            config.metro_radius_km,
+            config.as_of,
+            config.ensure_contact_geo,
+        )?;
         trip_results.push(TravelTripWithMatches {
             title: trip.title.clone(),
             start: trip.start,
@@ -207,11 +230,29 @@ pub fn build_travel_week_snapshot_with_geocoder<G: Geocoder>(
         week_end,
         built_at: Utc::now(),
         metro_radius_km: config.metro_radius_km,
+        search_location: config.search_location.clone(),
         trips: trip_results,
     };
 
     save_snapshot(&config.cache_root, &snapshot)?;
     Ok(snapshot)
+}
+
+fn resolve_trips_for_build(config: &TravelBuildConfig, ics: &str) -> Result<Vec<TravelTrip>> {
+    if let Some(loc) = config
+        .search_location
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        let (_, week_start, week_end) = target_week_for_build(config.as_of);
+        return Ok(vec![TravelTrip {
+            title: loc.to_string(),
+            start: week_start,
+            end: week_end,
+        }]);
+    }
+    trips_for_next_week(ics, config.as_of)
 }
 
 async fn resolve_ics_content_async(config: &TravelBuildConfig) -> Result<String> {
@@ -231,6 +272,7 @@ async fn match_contacts_for_trip_async(
     geocoder: &NominatimGeocoder,
     radius_km: f64,
     as_of: NaiveDate,
+    ensure_contact_geo: bool,
 ) -> Result<Vec<TravelMatch>> {
     let trip_point = geocoder.geocode_async(&trip.title).await?;
     let mut candidates: Vec<TravelMatch> = Vec::new();
@@ -242,7 +284,7 @@ async fn match_contacts_for_trip_async(
         if contact_address_query(contact).is_none() {
             continue;
         }
-        let contact_point = match resolve_contact_point(contact, geocoder) {
+        let contact_point = match resolve_contact_point(contact, geocoder, ensure_contact_geo) {
             Ok(p) => p,
             Err(_) => continue,
         };
@@ -264,6 +306,7 @@ fn match_contacts_for_trip<G: Geocoder>(
     geocoder: &G,
     radius_km: f64,
     as_of: NaiveDate,
+    ensure_contact_geo: bool,
 ) -> Result<Vec<TravelMatch>> {
     let trip_point = geocoder.geocode(&trip.title)?;
     let mut candidates: Vec<TravelMatch> = Vec::new();
@@ -275,7 +318,7 @@ fn match_contacts_for_trip<G: Geocoder>(
         if contact_address_query(contact).is_none() {
             continue;
         }
-        let contact_point = match resolve_contact_point(contact, geocoder) {
+        let contact_point = match resolve_contact_point(contact, geocoder, ensure_contact_geo) {
             Ok(p) => p,
             Err(_) => continue,
         };
@@ -334,14 +377,31 @@ fn sort_travel_matches(candidates: &mut [TravelMatch]) {
     });
 }
 
-fn resolve_contact_point<G: Geocoder>(contact: &Contact, geocoder: &G) -> Result<GeoPoint> {
+fn resolve_contact_point<G: Geocoder>(
+    contact: &Contact,
+    geocoder: &G,
+    ensure_contact_geo: bool,
+) -> Result<GeoPoint> {
     if let Some(p) = contact.geo {
-        if !needs_geocoding(contact) {
+        if !ensure_contact_geo || !needs_geocoding(contact) {
             return Ok(p);
         }
     }
-    let query = contact_address_query(contact).context("no address for contact")?;
-    geocoder.geocode(&query)
+    if !ensure_contact_geo {
+        anyhow::bail!("no cached GEO for contact");
+    }
+    let queries = geocode_queries_for_contact(contact);
+    if queries.is_empty() {
+        anyhow::bail!("no address for contact");
+    }
+    let mut last_err = None;
+    for query in queries {
+        match geocoder.geocode(&query) {
+            Ok(point) => return Ok(point),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap())
 }
 
 #[cfg(test)]
@@ -364,6 +424,7 @@ mod tests {
             full_name: name.to_string(),
             email: None,
             phone: None,
+            urls: vec![],
             org: None,
             city: Some(city.to_string()),
             state: Some(state.to_string()),
@@ -372,12 +433,34 @@ mod tests {
             note_raw: "April 2025: Met for testing.".to_string(),
             todos: vec![],
             reconnect_tag: reconnect.map(str::to_string),
+            birthday: None,
             rev: None,
             log_entries: vec![],
             vcf_path: PathBuf::from(format!("/tmp/{uid}.vcf")),
             geo: None,
             geo_source: None,
         }
+    }
+
+    #[test]
+    fn test_excludes_do_not_engage() {
+        let trip = TravelTrip {
+            title: "Chicago, IL".to_string(),
+            start: NaiveDate::from_ymd_opt(2026, 5, 26).unwrap(),
+            end: NaiveDate::from_ymd_opt(2026, 5, 29).unwrap(),
+        };
+        let geocoder = FixedGeocoder::us_metro_fixture();
+        let contacts = vec![contact(
+            "d1",
+            "Blocked Person",
+            "Chicago",
+            "IL",
+            None,
+            vec!["Do Not Engage".to_string()],
+        )];
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 18).unwrap();
+        let matches = match_contacts_for_trip(&trip, &contacts, &geocoder, 50.0, as_of, true).unwrap();
+        assert!(matches.is_empty());
     }
 
     #[test]
@@ -397,7 +480,7 @@ mod tests {
             vec![format!("{RECONNECT_CATEGORY_PREFIX} Never")],
         )];
         let as_of = NaiveDate::from_ymd_opt(2026, 5, 18).unwrap();
-        let matches = match_contacts_for_trip(&trip, &contacts, &geocoder, 50.0, as_of).unwrap();
+        let matches = match_contacts_for_trip(&trip, &contacts, &geocoder, 50.0, as_of, true).unwrap();
         assert!(matches.is_empty());
     }
 
@@ -412,7 +495,7 @@ mod tests {
         let mut c = contact("c1", "Evanston", "Evanston", "IL", None, vec![]);
         c.note_raw = "Met at conference, no month stamp.".to_string();
         let as_of = NaiveDate::from_ymd_opt(2026, 5, 18).unwrap();
-        let matches = match_contacts_for_trip(&trip, &[c], &geocoder, 50.0, as_of).unwrap();
+        let matches = match_contacts_for_trip(&trip, &[c], &geocoder, 50.0, as_of, true).unwrap();
         assert!(matches.is_empty());
     }
 
@@ -429,7 +512,7 @@ mod tests {
             contact("c2", "Littleton", "Littleton", "CO", None, vec![]),
         ];
         let as_of = NaiveDate::from_ymd_opt(2026, 5, 18).unwrap();
-        let matches = match_contacts_for_trip(&trip, &contacts, &geocoder, 50.0, as_of).unwrap();
+        let matches = match_contacts_for_trip(&trip, &contacts, &geocoder, 50.0, as_of, true).unwrap();
         let names: Vec<_> = matches.iter().map(|m| m.full_name.as_str()).collect();
         assert!(names.contains(&"Evanston"));
         assert!(!names.contains(&"Littleton"));
@@ -455,10 +538,25 @@ mod tests {
             contact("near", "Near Plain", "Chicago", "IL", None, vec![]),
         ];
         let as_of = NaiveDate::from_ymd_opt(2026, 5, 18).unwrap();
-        let matches = match_contacts_for_trip(&trip, &contacts, &geocoder, 50.0, as_of).unwrap();
+        let matches = match_contacts_for_trip(&trip, &contacts, &geocoder, 50.0, as_of, true).unwrap();
         assert!(!matches.is_empty());
         assert_eq!(matches[0].full_name, "Far Tagged");
         assert_eq!(matches[0].reason, MatchReason::TaggedBeforeTrip);
+    }
+
+    #[test]
+    fn test_skips_contacts_without_geo_when_not_ensuring() {
+        let trip = TravelTrip {
+            title: "Chicago, IL".to_string(),
+            start: NaiveDate::from_ymd_opt(2026, 5, 26).unwrap(),
+            end: NaiveDate::from_ymd_opt(2026, 5, 29).unwrap(),
+        };
+        let geocoder = FixedGeocoder::us_metro_fixture();
+        let contacts = vec![contact("c1", "Evanston", "Evanston", "IL", None, vec![])];
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 18).unwrap();
+        let matches =
+            match_contacts_for_trip(&trip, &contacts, &geocoder, 50.0, as_of, false).unwrap();
+        assert!(matches.is_empty());
     }
 
     #[test]
@@ -484,7 +582,9 @@ END:VCARD"#;
             metro_radius_km: 50.0,
             as_of: NaiveDate::from_ymd_opt(2026, 5, 18).unwrap(),
             force: true,
+            ensure_contact_geo: true,
             write_geo_to_vcf: true,
+            search_location: None,
         };
         let geocoder = FixedGeocoder::us_metro_fixture();
         let snap = build_travel_week_snapshot_with_geocoder(&config, &geocoder).unwrap();

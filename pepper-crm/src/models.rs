@@ -27,6 +27,8 @@ pub struct Contact {
     pub full_name: String,
     pub email: Option<String>,
     pub phone: Option<String>,
+    /// All `URL:` fields from the vCard (LinkedIn, personal site, etc.).
+    pub urls: Vec<String>,
     pub org: Option<String>,
     pub city: Option<String>,       // parsed from ADR field
     pub state: Option<String>,      // parsed from ADR field
@@ -39,10 +41,30 @@ pub struct Contact {
     pub note_raw: String,           // full raw NOTE field
     pub todos: Vec<String>,         // TODO: texts above CRM Log separator
     pub reconnect_tag: Option<String>,  // resolved from CATEGORIES, else NOTE
+    /// Parsed from vCard `BDAY` (month/day required; year optional).
+    pub birthday: Option<Birthday>,
     /// vCard `REV` revision date (anchor for reconnect interval math).
     pub rev: Option<NaiveDate>,
     pub log_entries: Vec<String>,   // lines from CRM Log block
     pub vcf_path: PathBuf,          // needed for write-back
+}
+
+/// Month/day (and optional birth year) from vCard `BDAY`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Birthday {
+    pub month: u32,
+    pub day: u32,
+    pub year: Option<i32>,
+}
+
+/// One contact with a birthday in the dashboard window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpcomingBirthdayInfo {
+    pub uid: String,
+    pub full_name: String,
+    pub occurrence: NaiveDate,
+    pub turning_age: Option<u32>,
+    pub days_until: u32,
 }
 
 /// Task data structure for database operations
@@ -123,6 +145,37 @@ pub struct TaskRow {
     pub email: Option<String>,
     pub body: String,
     pub status: TaskStatus,
+}
+
+/// A contact spotlighted in the weekly random-pick dashboard section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RandomPickInfo {
+    pub uid: String,
+    pub full_name: String,
+    pub org: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    /// LinkedIn profile from vCard `URL:` when present.
+    pub linkedin_url: Option<String>,
+    pub city: Option<String>,
+    pub state: Option<String>,
+    pub reconnect_tag: Option<String>,
+    /// Full vCard `NOTE` field.
+    pub note: String,
+    /// vCard `CATEGORIES` values (comma-joined for display).
+    pub categories: Vec<String>,
+}
+
+/// Result of selecting random contacts for the current ISO week.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RandomPickWeek {
+    pub week_id: String,
+    pub week_label: String,
+    pub picks: Vec<RandomPickInfo>,
+    pub eligible_count: usize,
+    /// True when picks came from a manual shuffle (not the default weekly draw).
+    #[serde(default)]
+    pub shuffled: bool,
 }
 
 /// A contact whose reconnect interval is due within a time window (computed from VCF).
@@ -223,6 +276,9 @@ pub struct TravelWeekSnapshot {
     /// Haversine radius used for this build (km).
     #[serde(default = "default_snapshot_metro_radius_km")]
     pub metro_radius_km: f64,
+    /// User-selected search place when the build was run (if any).
+    #[serde(default)]
+    pub search_location: Option<String>,
     pub trips: Vec<TravelTripWithMatches>,
 }
 

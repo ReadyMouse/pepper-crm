@@ -10,7 +10,7 @@ OUTPUT:
   - Feature definitions, display order, implementation priority
 
 NOTES:
-  - Sections marked Coming Soon in spec may now be live; see IMPLEMENTATION_STATUS.md.
+  - Status lines reflect pepper-web as of May 2026. See IMPLEMENTATION_STATUS.md for crate-level checklist.
 
 Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 -->
@@ -19,21 +19,49 @@ Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 Product feature spec for what Pepper surfaces on the dashboard and in the weekly digest. This is a **design document**, not web implementation detail.
 
-Every feature below is marked **Coming Soon** in the UI until built.
+**Dashboard (`pepper-web`):** all four sections are live. **Weekly digest email:** Pending Tasks + Reconnects Due only (no travel or random picks yet).
+
+### Implementation summary
+
+| Section | Dashboard | Digest email | Notes |
+|---------|-----------|--------------|-------|
+| Random People of the Week | ✅ Live (partial) | 🔜 | Three picks/week, not one; manual discovery links, not API enrichment |
+| Reconnects Due | ✅ Live (partial) | ✅ | Snooze → VCF write-back; no “log interaction” or `.ics` from UI |
+| Pending Tasks | ✅ Live (partial) | ✅ | Read-only list; no mark-done/snooze in UI |
+| Next Week Travel | ✅ Live (partial) | 🔜 | Stricter eligibility than original geo-only sketch |
+
+---
+
+### Engagement categories
+
+Contacts can carry vCard **CATEGORIES** values that limit where they appear. See [`README.md`](README.md#engagement-categories-in-categories) for full definitions.
+
+| Category | Reconnects Due | Next Week Travel | Random Person | Birthdays (planned) | Any search |
+|----------|----------------|------------------|---------------|---------------------|------------|
+| *(none)* | Per `Reconnect:` tag | Yes (if due) | Yes | Yes | Yes |
+| `Reconnect: Never` | No | No | Yes | Yes | Yes |
+| `Do Not Engage` | No | No | No | No | No |
+
+**Built behavior matches this table** (`pepper-crm/src/tags.rs`, wired in `pepper-web`).
 
 ---
 
 ## 1. Pending Tasks
 
-**Status:** Coming Soon  
-**Data source:** VCF `TODO:` tags → PostgreSQL `tasks` table  
+**Status:** ✅ Live (read-only)  
+**Data source:** VCF `TODO:` tags → PostgreSQL `tasks` table (`get_due_tasks`)  
 **Digest parity:** Yes — same list as the weekly email
 
 ### What it shows
-All open tasks across contacts: who, what TODO text, and (eventually) how long it's been pending.
+All open `pending` tasks across contacts: who and TODO text.
 
-### Future behavior
-- Pull from `get_due_tasks()` (already in `pepper-crm`)
+### Built (`pepper-web/templates/dashboard.html`, `fetch_due` in `main.rs`)
+- Lists tasks from PostgreSQL after VCF sync on startup
+- Excludes contacts with `Do Not Engage`
+- Summary stat: pending task count
+
+### Not built yet
+- How long each task has been pending
 - Mark done / snooze from the UI
 - Write-back optional notes to the contact's VCF
 
@@ -41,120 +69,144 @@ All open tasks across contacts: who, what TODO text, and (eventually) how long i
 
 ## 2. Reconnects Due
 
-**Status:** Coming Soon  
-**Data source:** VCF `Reconnect:` tags → PostgreSQL `reconnects` table  
-**Digest parity:** Yes — same list as the weekly email
+**Status:** ✅ Live (partial)  
+**Data source:** VCF `Reconnect:` tags — computed from synced contacts via `due_reconnects_from_contacts()` (7-day window)  
+**Digest parity:** Yes — same list as the weekly email (digest adds `.ics` attachments on send)
 
 ### What it shows
-Contacts whose reconnect reminder falls within the current window (default: next 7 days).
+Contacts whose timed reconnect interval is due on or before the next **7 days** (anchor: vCard `REV`, or latest past `Month YYYY:` note).
 
-### Future behavior
-- Pull from `get_due_reconnects()`
-- One-click "log interaction" → append CRM log to VCF, reset reconnect tag
-- Attach `.ics` calendar invite (same as digest)
+### Eligibility (built)
+- Exclude `CATEGORIES:Reconnect: Never`
+- Exclude `CATEGORIES:Do Not Engage`
+- Exclude venue/business cards and city-trip triggers (`before Chicago trip`)
+
+### Built
+- List with due date and reconnect tag
+- Snooze dropdown → `POST /travel/snooze` writes new `Reconnect:` interval to VCF and removes from list
+- Summary stat: reconnects due count
+
+### Not built yet
+- One-click “log interaction” → append CRM log to VCF, reset reconnect tag
+- Attach `.ics` calendar invite from dashboard (digest send path has this)
 
 ---
 
-## 3. Random Person of the Week
+## 3. Random People of the Week
 
-**Status:** Coming Soon  
-**Data source:** Random selection from contacts DB + external enrichment
+**Status:** ✅ Live (partial) — spec originally described **one** person; dashboard ships **three** per ISO week  
+**Data source:** Random selection from contacts in memory (VCF sync) + assistive action links
 
 ### What it shows
-One contact chosen at random each week — someone you might have drifted away from. The goal is **serendipitous reconnection**, not just due-date reminders.
+Up to **three** contacts chosen at random for the ISO week containing today — serendipitous reconnection, not interval reminders. **Shuffle 3 new** picks a fresh trio on demand (cached under `.cache/random_pick/`).
 
-### Enrichment pipeline (planned)
+### Built (`pepper-crm/src/random_pick.rs`, dashboard section)
+- Weekly stable seed (same trio until Monday) + manual shuffle
+- Excludes `Do Not Engage` and `Venue/Business`; **`Reconnect: Never` is eligible**
+- Card shows name, org, location, reconnect tag, note preview, email/phone, LinkedIn if already on vCard `URL:`
+- **Suggested actions** (assistive only — nothing auto-written except Schedule reconnect):
+  - Search the web (Google query from name + org + city)
+  - Open LinkedIn profile (only if URL already on card)
+  - Search GitHub
+  - Send a check-in message (`mailto:` draft when email present)
+  - Schedule reconnect: 1 month (snooze → VCF, same as travel snooze)
 
-1. **Pick** a contact (weighted toward: no recent CRM log, long time since sync, or explicit "reconnect someday" tags with no due date). Do not pick anyone with "Reconnect: Never" tag.
-2. **Search** the public web using name + org + city from the VCF:
-   - Google / web search API
-   - LinkedIn profile URL discovery
-   - Twitter/X, GitHub, personal site, company page
-3. **Present** findings as suggested fields to add to the contact card:
-   - LinkedIn URL → `URL` or custom field in VCF
-   - Social handles → `NOTE` or structured tags
-   - Recent headline / role change → summary blurb
-4. **Suggest actions:**
-   - "Add LinkedIn to contact card"
-   - "Send a check-in message"
-   - "Schedule reconnect: 1 month"
+### Spec vs built (gaps)
 
-### Constraints
-- Enrichment is **assistive, not automatic** — you approve before anything is written to the VCF.
-- Respect rate limits and ToS for search APIs.
-- Cache enrichment results (TTL ~7 days) to avoid re-querying every page load.
+| Spec idea | Built? |
+|-----------|--------|
+| One person per week | **No** — three picks (`RANDOM_PICK_COUNT = 3`) |
+| Weighted toward no recent CRM log / long sync | **No** — uniform random among eligible contacts |
+| Web/LinkedIn API enrichment with “Apply to vCard” | **No** — manual search links; LinkedIn discovery deferred until LLM disambiguation |
+| Enrichment result cache (~7 days) | **No** |
+| Auto-suggest social URLs to add to card | **No** |
 
-### Example output (future)
+### Future behavior (still planned)
+- Optional single-person mode or smarter weighting
+- API-backed enrichment with approve-before-write
+- Rate limits / ToS-safe search integration
+
+### Example output (current)
 ```
-Random Person of the Week: Alice Smith (Acme Corp)
-  Found: linkedin.com/in/alicesmith · github.com/alice
-  Suggested: Add LinkedIn to contact card  [Apply]  [Dismiss]
+Random People of the Week: May 19 – May 25, 2026
+  Alice Smith (Acme Corp · Chicago, IL)
+  Suggested: [Search the web] [Search GitHub] [Send a check-in] [Schedule reconnect: 1 month]
 ```
 
 ---
 
 ## 4. Next Week Travel
 
-**Status:** Coming Soon  
-**Data source:** Your calendar (future) + contact geo data from VCF `ADR` / city fields
+**Status:** ✅ Live (partial)  
+**Data source:** Google Calendar ICS (`GOOGLE_CALENDAR_ICS_URL`) + contact geo from VCF `ADR` / geocoded `GEO`  
+**Digest parity:** No — dashboard only; digest template has no travel section yet
 
 ### What it shows
-Where you'll be next week, and **who you could meet while there** — dinners, coffee, quick catch-ups.
+Trips for the target calendar week and contacts you could meet in each trip’s metro area. Rebuild **on demand** (`POST /travel/refresh`) or via `pepper` weekly run — **not** on every page load. Snapshot: `.cache/travel/{iso_week}.json`.
 
-### Calendar integration (planned)
-- Read upcoming events from Google Calendar / Apple Calendar / `.ics` feed
-- Extract **destination city** from event location or title (e.g. "Chicago trip", "ETHDenver")
-- Show: "Next week you're in **Chicago** (Mon–Thu)"
+### Eligibility (built — stricter than original geo-only sketch)
+- Exclude `Reconnect: Never` and `Do Not Engage`
+- Exclude venues/business cards
+- Contact must have a **recent interaction anchor** (vCard `REV` or `Month YYYY:` note within ~18 months)
+- Contact’s timed `Reconnect:` interval must be **due** (or due within travel window) — not every person in the metro
 
-### Soft geo matching (planned)
+### Built
+- Calendar trip list with date ranges; trip location geocoded from event title/location
+- Metro-radius matching (default ~50 mi, configurable on refresh form)
+- Haversine distance; ranking favors `before [city] trip` tags, then proximity
+- Per-match snooze (VCF write-back)
+- Summary stat: travel match count (when snapshot exists)
+- Optional GEO write-back to VCF files during build
 
-Addresses in VCFs rarely match where you actually travel. Matching must be **metro-area aware**, not exact city string equality.
+### Spec vs built (gaps)
 
-| You are in | Contact address | Match? |
-|------------|-----------------|--------|
-| Chicago, IL | Chicago, IL | ✅ exact |
-| Chicago, IL | Evanston, IL | ✅ same metro (~20 mi) |
-| Chicago, IL | Littleton, CO | ❌ different metro |
-| Denver, CO | Littleton, CO | ✅ Denver metro (~30 min) |
-| Denver, CO | Boulder, CO | ✅ Denver metro |
+| Spec idea | Built? |
+|-----------|--------|
+| Soft geo / metro matching | **Yes** (`geo.rs`, `travel.rs`) |
+| Show all contacts in metro while traveling | **Partial** — only reconnect-due + recent-anchor contacts |
+| “Draft outreach email” / map view | **No** |
+| Travel section in weekly digest email | **No** |
 
-### Algorithm sketch
-1. Geocode your travel city → lat/lng + metro radius (default ~50 km / ~30 mi, configurable).
-2. Geocode each contact's city from `ADR` (or parse from `NOTE` if missing).
-3. Haversine distance ≤ threshold → **suggest reach-out**.
-4. Rank by: existing `Reconnect: before [city] trip` tags first, then proximity, then time since last log.
-
-### Suggested actions (future)
-- "Email Alice — she's in the Denver area, you're there Tue–Wed"
-- "Schedule dinner with Bob" → draft `.ics` invite
-- Contacts with `Reconnect: before Chicago trip` auto-surface when Chicago is detected
-
-### Example output (future)
+### Example output (current)
 ```
-Next Week Travel: Chicago, IL (May 26–29)
-  3 people in the Chicago metro you could meet:
-    · James Martinez — Evanston (~15 mi)
-    · Sofia Chen — Chicago
-    · Liam Anderson — tagged "before Chicago trip"
-  [Draft outreach email]  [View on map]
+Next Week Travel · Updated May 19, 2026 14:32
+  Chicago, IL · May 26–29
+    James Martinez — Evanston (~15 mi) · Reconnect: 3 months
+    [Snooze ▼]
 ```
 
 ---
 
 ## Display order
 
-1. Random Person of the Week  
-2. Reconnects Due  
-3. Pending Tasks  
-4. Next Week Travel  
+**Built order** (`pepper-web/templates/dashboard.html`):
 
-Summary stats at the top: pending task count, reconnects due, travel matches.
+1. Summary stats (travel matches, pending tasks, reconnects due, upcoming birthdays)  
+2. Next Week Travel  
+3. Pending Tasks  
+4. Reconnects Due  
+5. Random People of the Week  
+6. Upcoming Birthdays (next 14 days, vCard `BDAY`)
 
 ---
 
-## Implementation priority (suggested)
+## Implementation priority (original → current)
 
-1. **Pending Tasks + Reconnects Due** — wire up existing `pepper-crm` queries (data already syncs on startup)
-2. **Weekly digest** — email send path (MCP servers + `pepper` runner)
-3. **Next Week Travel** — calendar read + geocoding service
-4. **Random Person of the Week** — random pick + search enrichment API
+| Priority | Item | State |
+|----------|------|-------|
+| 1 | Pending Tasks + Reconnects Due | ✅ Done |
+| 2 | Weekly digest (email) | ✅ Done (tasks + reconnects) |
+| 3 | Next Week Travel | ✅ Done (dashboard); digest section 🔜 |
+| 4 | Random Person + enrichment API | 🔶 Dashboard picks + manual links; API enrichment 🔜 |
+
+---
+
+## Code map (verification)
+
+| Spec section | Primary implementation |
+|--------------|------------------------|
+| Pending Tasks | `pepper-crm/src/db.rs` (`get_due_tasks`), `pepper-web/src/main.rs` (`fetch_due`) |
+| Reconnects Due | `pepper-crm/src/tags.rs` (`due_reconnects_from_contacts`) |
+| Random picks | `pepper-crm/src/random_pick.rs`, `POST /random/shuffle` |
+| Next Week Travel | `pepper-crm/src/travel.rs`, `travel_cache.rs`, `POST /travel/refresh` |
+| Digest | `templates/digest.html`, `mcp-digest-server` |
