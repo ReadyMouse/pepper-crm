@@ -28,10 +28,11 @@ pub const RECONNECT_CATEGORY_PREFIX: &str = "Reconnect:";
 /// vCard category: omit from all Pepper surfaces (contact stays in VCF).
 pub const DO_NOT_ENGAGE_CATEGORY: &str = "Do Not Engage";
 
-/// Parse all TODO: tags from the note field (above the CRM Log separator)
+/// Parse all TODO: tags from the note field (above the CRM Log separator).
+/// Matches `TODO:`, `Todo:`, `todo:`, etc.
 pub fn parse_todos(note: &str) -> Vec<String> {
     let content = extract_content_above_log(note);
-    let re = Regex::new(r"(?m)^TODO:\s*(.+)$").unwrap();
+    let re = Regex::new(r"(?im)^\s*TODO:\s*(.+)$").unwrap();
     
     re.captures_iter(&content)
         .filter_map(|cap| cap.get(1).map(|m| m.as_str().trim().to_string()))
@@ -506,6 +507,13 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_todos_case_insensitive() {
+        let note = "Met at conference.\nTodo: call back\n todo: send deck";
+        let todos = parse_todos(note);
+        assert_eq!(todos, vec!["call back", "send deck"]);
+    }
+
+    #[test]
     fn test_parse_reconnect_tag() {
         let note = "Some notes.\nReconnect: 2 weeks\nMore notes.\nReconnect: 3 months";
         let tag = parse_reconnect_tag(note);
@@ -657,6 +665,7 @@ mod tests {
             rev: None,
             log_entries: vec![],
             vcf_path: "x.vcf".into(),
+            carddav_href: None,
         }
     }
 
@@ -762,6 +771,7 @@ mod tests {
             rev: None,
             log_entries: vec![],
             vcf_path: "x.vcf".into(),
+            carddav_href: None,
         };
         assert!(is_venue_contact(&c));
         assert!(!is_travel_match_eligible(&c, as_of));

@@ -37,9 +37,11 @@ icalendar = "0.16"     # .ics generation
 tera = "1"             # email templating
 lettre = "0.11"        # SMTP sending
 regex = "1"            # tag parsing
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 dotenvy = { workspace = true }
 rand = "0.8"
+quick-xml = "0.37"
+base64 = "0.22"
 
 [[example]]
 name = "test_calendar"
@@ -50,8 +52,16 @@ name = "parse_contacts"
 path = "examples/parse_contacts.rs"
 
 [[example]]
+name = "geocode_contacts"
+path = "examples/geocode_contacts.rs"
+
+[[example]]
 name = "random_pick_smoke"
 path = "examples/random_pick_smoke.rs"
+
+[[example]]
+name = "test_smtp"
+path = "examples/test_smtp.rs"
 
 [dev-dependencies]
 fake = { version = "2", features = ["derive", "chrono"] }

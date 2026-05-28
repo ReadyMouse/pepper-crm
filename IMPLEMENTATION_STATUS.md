@@ -95,7 +95,7 @@ All servers use stdio transport via `rmcp`:
 
 | Item | Notes |
 |------|-------|
-| CardDAV read/write | Stubbed for Pi production |
+| CardDAV read/write | `CARDDAV_*` env → REPORT fetch + PUT write (Radicale) |
 | HTTP/SSE MCP transport | stdio only today |
 | Matrix bot | Future chat interface |
 | Random Person API enrichment (auto-suggest URLs) | Spec in `DASHBOARD_SECTIONS.md` — dashboard has search/mailto links only |

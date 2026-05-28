@@ -196,6 +196,7 @@ mod tests {
             rev: None,
             log_entries: vec![],
             vcf_path: PathBuf::from("x.vcf"),
+            carddav_href: None,
             birthday: Some(Birthday {
                 month: 5,
                 day: 25,
@@ -244,6 +245,7 @@ mod tests {
             rev: None,
             log_entries: vec![],
             vcf_path: PathBuf::from("x.vcf"),
+            carddav_href: None,
             birthday: Some(Birthday {
                 month: 5,
                 day: 20,

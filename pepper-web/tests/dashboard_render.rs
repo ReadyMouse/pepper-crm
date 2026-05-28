@@ -28,6 +28,7 @@ fn render_dashboard_does_not_stack_overflow() {
     context.insert("reconnect_count", &0usize);
     context.insert("reconnect_window_days", &7u32);
     context.insert("reconnect_snoozed", &false);
+    context.insert("task_completed", &false);
     context.insert("random_pick_count", &1usize);
     context.insert("random_week_label", "May 19 – May 25, 2026");
     context.insert("random_eligible_count", &1548usize);
@@ -76,6 +77,12 @@ fn render_dashboard_does_not_stack_overflow() {
     context.insert("travel_snoozed", &false);
     context.insert("travel_just_refreshed", &false);
     context.insert("travel_refresh_error", &false);
+    context.insert("geo_just_finished", &false);
+    context.insert("geo_refresh_error", &false);
+    context.insert("geo_geocoded_count", &0usize);
+    context.insert("geo_failed_count", &0usize);
+    context.insert("geo_with_coords", &0usize);
+    context.insert("geo_with_address", &0usize);
     context.insert("birthdays", &Vec::<serde_json::Value>::new());
     context.insert("birthday_count", &0usize);
     context.insert("birthday_window_days", &14u32);

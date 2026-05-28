@@ -14,12 +14,12 @@
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
-use crate::models::{IcsFile, ReconnectRow};
+use crate::models::{DueReconnectInfo, IcsFile, ReconnectRow};
 use anyhow::Result;
 use icalendar::{Alarm, Calendar, Component, Event, EventLike};
 use chrono::{Duration, NaiveTime};
+use uuid::Uuid;
 
-/// Build an ICS file for a single reconnect reminder
 pub fn build_ics(reconnect: &ReconnectRow) -> Result<IcsFile> {
     let summary = format!("Follow up: {}", reconnect.full_name);
     let description = format!(
@@ -70,6 +70,22 @@ pub fn build_ics_batch(reconnects: &[ReconnectRow]) -> Result<Vec<IcsFile>> {
     }
     
     Ok(ics_files)
+}
+
+/// Build an ICS attachment from a due reconnect (VCF-derived, for weekly digest).
+pub fn build_ics_for_due(reconnect: &DueReconnectInfo, email: Option<&str>) -> Result<IcsFile> {
+    use crate::models::ReconnectStatus;
+    let row = ReconnectRow {
+        reconnect_id: Uuid::nil(),
+        contact_id: Uuid::nil(),
+        vcard_uid: reconnect.uid.clone(),
+        full_name: reconnect.full_name.clone(),
+        email: email.map(str::to_string),
+        due_date: reconnect.due_date,
+        original_tag: reconnect.tag.clone(),
+        status: ReconnectStatus::Pending,
+    };
+    build_ics(&row)
 }
 
 #[cfg(test)]

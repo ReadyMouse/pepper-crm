@@ -46,7 +46,10 @@ pub struct Contact {
     /// vCard `REV` revision date (anchor for reconnect interval math).
     pub rev: Option<NaiveDate>,
     pub log_entries: Vec<String>,   // lines from CRM Log block
-    pub vcf_path: PathBuf,          // needed for write-back
+    pub vcf_path: PathBuf,          // local file path (or synthetic name for CardDAV)
+    /// Absolute or collection-relative href when loaded from CardDAV.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carddav_href: Option<String>,
 }
 
 /// Month/day (and optional birth year) from vCard `BDAY`.
@@ -185,6 +188,14 @@ pub struct DueReconnectInfo {
     pub full_name: String,
     pub due_date: NaiveDate,
     pub tag: String,
+}
+
+/// An open TODO parsed from a contact vCard (not stored in PostgreSQL).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingTaskInfo {
+    pub uid: String,
+    pub full_name: String,
+    pub description: String,
 }
 
 /// Database row returned from reconnect queries

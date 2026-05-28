@@ -18,7 +18,10 @@
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use crate::calendar::{fetch_ics, trips_for_next_week};
-use crate::contact_geo::{ensure_contacts_geocoded, ensure_contacts_geocoded_sync, needs_geocoding};
+use crate::contact_geo::{
+    ensure_contacts_geocoded, ensure_contacts_geocoded_sync, needs_geocoding,
+    should_ensure_contact_geo,
+};
 use crate::geo::{
     km_to_miles, miles_to_km, GeoPoint, Geocoder, NominatimGeocoder, DEFAULT_METRO_RADIUS_MI,
 };
@@ -30,7 +33,7 @@ use crate::tags::{
 };
 use crate::travel_cache::{save_snapshot, target_week_for_build};
 use crate::vcard::{
-    contact_address_query, geocode_queries_for_contact, parse_vcards_from_dir,
+    contact_address_query, geocode_queries_for_contact, parse_contacts,
 };
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
@@ -131,8 +134,14 @@ async fn build_travel_week_snapshot_async(
 
     let ics = resolve_ics_content_async(config).await?;
     let trips = resolve_trips_for_build(config, &ics)?;
-    let mut contacts = parse_vcards_from_dir(&config.contacts_dir)?;
-    if config.ensure_contact_geo && contacts.iter().any(needs_geocoding) {
+    let mut contacts = parse_contacts(&config.contacts_dir)?;
+    let run_geo_ensure = config.ensure_contact_geo || should_ensure_contact_geo(&contacts);
+    if run_geo_ensure && !config.ensure_contact_geo {
+        info!(
+            "Low GEO coverage on contacts — running geocode pass (first refresh after export may take several minutes)"
+        );
+    }
+    if run_geo_ensure && contacts.iter().any(needs_geocoding) {
         ensure_contacts_geocoded(&mut contacts, geocoder, config.write_geo_to_vcf).await?;
     }
 
@@ -144,7 +153,7 @@ async fn build_travel_week_snapshot_async(
             geocoder,
             config.metro_radius_km,
             config.as_of,
-            config.ensure_contact_geo,
+            run_geo_ensure,
         )
         .await?;
         trip_results.push(TravelTripWithMatches {
@@ -201,8 +210,9 @@ pub fn build_travel_week_snapshot_with_geocoder<G: Geocoder>(
         None => anyhow::bail!("ics_content required for sync geocoder test builds"),
     };
     let trips = resolve_trips_for_build(config, &ics)?;
-    let mut contacts = parse_vcards_from_dir(&config.contacts_dir)?;
-    if config.ensure_contact_geo && contacts.iter().any(needs_geocoding) {
+    let mut contacts = parse_contacts(&config.contacts_dir)?;
+    let run_geo_ensure = config.ensure_contact_geo || should_ensure_contact_geo(&contacts);
+    if run_geo_ensure && contacts.iter().any(needs_geocoding) {
         ensure_contacts_geocoded_sync(&mut contacts, geocoder, config.write_geo_to_vcf)?;
     }
 
@@ -214,7 +224,7 @@ pub fn build_travel_week_snapshot_with_geocoder<G: Geocoder>(
             geocoder,
             config.metro_radius_km,
             config.as_of,
-            config.ensure_contact_geo,
+            run_geo_ensure,
         )?;
         trip_results.push(TravelTripWithMatches {
             title: trip.title.clone(),
@@ -437,6 +447,7 @@ mod tests {
             rev: None,
             log_entries: vec![],
             vcf_path: PathBuf::from(format!("/tmp/{uid}.vcf")),
+            carddav_href: None,
             geo: None,
             geo_source: None,
         }

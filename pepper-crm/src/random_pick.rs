@@ -38,6 +38,12 @@ struct ShuffleCache {
     uids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DismissedCache {
+    week_id: String,
+    uids: Vec<String>,
+}
+
 fn week_seed(week_id: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     week_id.hash(&mut hasher);
@@ -95,10 +101,13 @@ fn contact_to_pick_info(contact: &Contact) -> RandomPickInfo {
     }
 }
 
-fn eligible_contacts<'a>(contacts: &'a [Contact]) -> Vec<&'a Contact> {
+fn eligible_contacts<'a>(
+    contacts: &'a [Contact],
+    dismissed: &HashSet<String>,
+) -> Vec<&'a Contact> {
     let mut eligible: Vec<&Contact> = contacts
         .iter()
-        .filter(|c| is_random_pick_eligible(c))
+        .filter(|c| is_random_pick_eligible(c) && !dismissed.contains(&c.uid))
         .collect();
     eligible.sort_by(|a, b| a.uid.cmp(&b.uid));
     eligible
@@ -117,6 +126,62 @@ fn shuffle_cache_path(cache_root: impl AsRef<Path>, week_id: &str) -> PathBuf {
         .as_ref()
         .join(RANDOM_PICK_CACHE_SUBDIR)
         .join(format!("{week_id}-shuffle.json"))
+}
+
+fn dismissed_cache_path(cache_root: impl AsRef<Path>, week_id: &str) -> PathBuf {
+    cache_root
+        .as_ref()
+        .join(RANDOM_PICK_CACHE_SUBDIR)
+        .join(format!("{week_id}-dismissed.json"))
+}
+
+fn load_dismissed_uids(cache_root: impl AsRef<Path>, as_of: NaiveDate) -> Result<HashSet<String>> {
+    let (week_id, _) = week_meta(as_of);
+    let path = dismissed_cache_path(&cache_root, &week_id);
+    if !path.exists() {
+        return Ok(HashSet::new());
+    }
+    let data = std::fs::read_to_string(&path)
+        .with_context(|| format!("read random pick dismissed {}", path.display()))?;
+    let cache: DismissedCache = serde_json::from_str(&data)?;
+    if cache.week_id != week_id {
+        return Ok(HashSet::new());
+    }
+    Ok(cache.uids.into_iter().collect())
+}
+
+/// Record that the user handled a random pick this week (reconnect set) — hide until next ISO week.
+pub fn dismiss_random_pick(
+    cache_root: impl AsRef<Path>,
+    as_of: NaiveDate,
+    uid: &str,
+) -> Result<()> {
+    let (week_id, _) = week_meta(as_of);
+    let path = dismissed_cache_path(&cache_root, &week_id);
+    let mut uids: Vec<String> = if path.exists() {
+        let data = std::fs::read_to_string(&path)?;
+        let cache: DismissedCache = serde_json::from_str(&data).unwrap_or(DismissedCache {
+            week_id: week_id.clone(),
+            uids: vec![],
+        });
+        if cache.week_id == week_id {
+            cache.uids
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
+    if uids.iter().any(|u| u == uid) {
+        return Ok(());
+    }
+    uids.push(uid.to_string());
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let cache = DismissedCache { week_id, uids };
+    std::fs::write(&path, serde_json::to_string_pretty(&cache)?)?;
+    Ok(())
 }
 
 pub fn load_shuffle_override(
@@ -160,13 +225,20 @@ fn build_week_from_uids(
     as_of: NaiveDate,
     uids: &[String],
     shuffled: bool,
+    dismissed: &HashSet<String>,
 ) -> RandomPickWeek {
     let (week_id, week_label) = week_meta(as_of);
-    let eligible_count = eligible_contacts(contacts).len();
+    let eligible_count = eligible_contacts(contacts, dismissed).len();
     let by_uid: HashMap<&str, &Contact> = contacts.iter().map(|c| (c.uid.as_str(), c)).collect();
     let picks: Vec<RandomPickInfo> = uids
         .iter()
-        .filter_map(|uid| by_uid.get(uid.as_str()).map(|c| contact_to_pick_info(c)))
+        .filter_map(|uid| {
+            let contact = by_uid.get(uid.as_str())?;
+            if dismissed.contains(uid) || !is_random_pick_eligible(contact) {
+                return None;
+            }
+            Some(contact_to_pick_info(contact))
+        })
         .collect();
     RandomPickWeek {
         week_id,
@@ -183,8 +255,17 @@ pub fn random_picks_for_week(
     as_of: NaiveDate,
     count: usize,
 ) -> RandomPickWeek {
+    random_picks_for_week_with_dismissed(contacts, as_of, count, &HashSet::new())
+}
+
+fn random_picks_for_week_with_dismissed(
+    contacts: &[Contact],
+    as_of: NaiveDate,
+    count: usize,
+    dismissed: &HashSet<String>,
+) -> RandomPickWeek {
     let (week_id, week_label) = week_meta(as_of);
-    let eligible = eligible_contacts(contacts);
+    let eligible = eligible_contacts(contacts, dismissed);
     let eligible_count = eligible.len();
 
     if eligible.is_empty() {
@@ -219,8 +300,18 @@ pub fn random_picks_shuffled(
     count: usize,
     exclude_uids: &[String],
 ) -> RandomPickWeek {
+    random_picks_shuffled_with_dismissed(contacts, as_of, count, exclude_uids, &HashSet::new())
+}
+
+fn random_picks_shuffled_with_dismissed(
+    contacts: &[Contact],
+    as_of: NaiveDate,
+    count: usize,
+    exclude_uids: &[String],
+    dismissed: &HashSet<String>,
+) -> RandomPickWeek {
     let (week_id, week_label) = week_meta(as_of);
-    let eligible = eligible_contacts(contacts);
+    let eligible = eligible_contacts(contacts, dismissed);
     let eligible_count = eligible.len();
 
     if eligible.is_empty() {
@@ -262,12 +353,24 @@ pub fn resolve_random_picks(
     as_of: NaiveDate,
     count: usize,
 ) -> Result<RandomPickWeek> {
+    let dismissed = load_dismissed_uids(&cache_root, as_of)?;
     if let Some(uids) = load_shuffle_override(&cache_root, as_of)? {
         if !uids.is_empty() {
-            return Ok(build_week_from_uids(contacts, as_of, &uids, true));
+            return Ok(build_week_from_uids(
+                contacts,
+                as_of,
+                &uids,
+                true,
+                &dismissed,
+            ));
         }
     }
-    Ok(random_picks_for_week(contacts, as_of, count))
+    Ok(random_picks_for_week_with_dismissed(
+        contacts,
+        as_of,
+        count,
+        &dismissed,
+    ))
 }
 
 /// Shuffle, persist override for this ISO week, and return fresh picks.
@@ -278,7 +381,14 @@ pub fn shuffle_and_save(
     count: usize,
     current_uids: &[String],
 ) -> Result<RandomPickWeek> {
-    let week = random_picks_shuffled(contacts, as_of, count, current_uids);
+    let dismissed = load_dismissed_uids(&cache_root, as_of)?;
+    let week = random_picks_shuffled_with_dismissed(
+        contacts,
+        as_of,
+        count,
+        current_uids,
+        &dismissed,
+    );
     let uids: Vec<String> = week.picks.iter().map(|p| p.uid.clone()).collect();
     save_shuffle_override(cache_root, as_of, &uids)?;
     Ok(week)
@@ -313,6 +423,7 @@ mod tests {
             rev: None,
             log_entries: vec![],
             vcf_path: PathBuf::from("x.vcf"),
+            carddav_href: None,
         }
     }
 
@@ -393,5 +504,33 @@ mod tests {
         let names: Vec<_> = result.picks.iter().map(|p| p.full_name.as_str()).collect();
         assert!(names.contains(&"Mom") || names.contains(&"Regular Friend"));
         assert!(!names.iter().any(|n| *n == "Blocked Person"));
+    }
+
+    #[test]
+    fn dismiss_hides_pick_for_the_week() {
+        let dir = TempDir::new().unwrap();
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 19).unwrap();
+        let contacts: Vec<Contact> = (0..5)
+            .map(|i| sample(&format!("uid-{i:02}"), &format!("Person {i}")))
+            .collect();
+        let first = contacts[0].uid.clone();
+        dismiss_random_pick(dir.path(), as_of, &first).unwrap();
+
+        let resolved = resolve_random_picks(&contacts, dir.path(), as_of, 3).unwrap();
+        assert!(!resolved.picks.iter().any(|p| p.uid == first));
+    }
+
+    #[test]
+    fn shuffle_cache_filters_ineligible_uids() {
+        let dir = TempDir::new().unwrap();
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 19).unwrap();
+        let mut blocked = sample("blocked", "Blocked Person");
+        blocked.categories = vec!["Do Not Engage".into()];
+        let ok = sample("ok", "Regular Friend");
+        save_shuffle_override(dir.path(), as_of, &["blocked".into(), "ok".into()]).unwrap();
+
+        let resolved = resolve_random_picks(&[blocked, ok], dir.path(), as_of, 3).unwrap();
+        assert_eq!(resolved.picks.len(), 1);
+        assert_eq!(resolved.picks[0].uid, "ok");
     }
 }

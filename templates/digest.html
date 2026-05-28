@@ -3,9 +3,11 @@
 
     HTML email body rendered by the digest/mailer pipeline (Tera).
 
-  INPUT: Tera context — date, tasks[], reconnects[], task_count, reconnect_count.
+  INPUT: Tera context — date, dashboard_url, tasks[], reconnects[], travel_trips[], birthdays[],
+         random_picks[], counts, random_week_label, birthday_window_days.
   OUTPUT: Standalone HTML email (inline CSS) for weekly digest delivery.
-  NOTES: Used by mcp-digest-server / mailer; separate from pepper-web preview styling.
+  NOTES: Section order: Pending Tasks → Reconnects → Travel → Birthdays → Random People.
+         Used by mcp-digest-server, pepper-web /preview, and weekly send.
 
   Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 -->
@@ -14,110 +16,163 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pepper CRM Weekly Digest</title>
+    <title>Hey Mylo, Pepper here</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             line-height: 1.6;
-            color: #333;
+            color: #2c3333;
             max-width: 600px;
             margin: 0 auto;
             padding: 20px;
-            background-color: #f5f5f5;
+            background-color: #e8ecec;
         }
         .container {
             background-color: #ffffff;
             border-radius: 8px;
             padding: 30px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.06);
         }
         h1 {
-            color: #d32f2f;
+            color: #3d8487;
             margin-top: 0;
             font-size: 24px;
-            border-bottom: 2px solid #d32f2f;
+            border-bottom: 2px solid #4a9b9e;
             padding-bottom: 10px;
         }
         h2 {
-            color: #666;
+            color: #3d8487;
             font-size: 18px;
             margin-top: 30px;
             margin-bottom: 15px;
         }
+        h3 {
+            color: #2c3333;
+            font-size: 16px;
+            margin: 20px 0 10px;
+        }
         .date {
-            color: #999;
+            color: #5a6565;
             font-size: 14px;
-            margin-bottom: 20px;
+            margin-bottom: 12px;
         }
         .summary {
-            background-color: #f9f9f9;
-            border-left: 4px solid #d32f2f;
-            padding: 15px;
-            margin-bottom: 30px;
+            color: #2c3333;
+            font-size: 15px;
+            margin-bottom: 24px;
         }
         .summary strong {
-            color: #d32f2f;
+            color: #3d8487;
+        }
+        .dashboard-cta-wrap {
+            text-align: center;
+            margin: 0 0 30px;
+        }
+        .dashboard-cta {
+            display: inline-block;
+            background-color: #4a9b9e;
+            color: #ffffff !important;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 15px;
+            padding: 12px 24px;
+            border-radius: 6px;
+        }
+        .dashboard-cta-note {
+            color: #5a6565;
+            font-size: 13px;
+            margin: 10px 0 0;
         }
         .item {
             background-color: #fafafa;
-            border: 1px solid #e0e0e0;
+            border: 1px solid #d4dada;
             border-radius: 4px;
             padding: 15px;
             margin-bottom: 10px;
         }
         .item-name {
             font-weight: 600;
-            color: #333;
+            color: #2c3333;
             font-size: 16px;
         }
         .item-detail {
-            color: #666;
+            color: #5a6565;
             margin-top: 5px;
             font-size: 14px;
         }
+        .section-intro {
+            color: #5a6565;
+            font-size: 14px;
+            margin: -5px 0 15px;
+        }
+        .trip-block {
+            margin-bottom: 20px;
+        }
         .empty-state {
             text-align: center;
-            padding: 40px 20px;
-            color: #999;
+            padding: 20px;
+            color: #5a6565;
+            font-size: 14px;
+            background-color: #fafafa;
+            border: 1px dashed #d4dada;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .note-block {
+            white-space: pre-wrap;
+            font-size: 13px;
+            color: #5a6565;
+            margin-top: 8px;
         }
         .footer {
             margin-top: 30px;
             padding-top: 20px;
-            border-top: 1px solid #e0e0e0;
+            border-top: 1px solid #d4dada;
             font-size: 12px;
-            color: #999;
+            color: #5a6565;
             text-align: center;
         }
-        .pepper-emoji {
-            font-size: 32px;
-            display: block;
-            margin-bottom: 10px;
+        .footnote {
+            margin-top: 20px;
+            font-size: 14px;
+            color: #5a6565;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <span class="pepper-emoji">🌶️</span>
-        <h1>Pepper CRM Weekly Digest</h1>
+        <h1>Hey Mylo, Pepper here</h1>
         <div class="date">{{ date }}</div>
-        
+
         <div class="summary">
-            <strong>This week:</strong> {{ task_count }} pending task{% if task_count != 1 %}s{% endif %}, 
-            {{ reconnect_count }} reconnect{% if reconnect_count != 1 %}s{% endif %} due
+            <strong>This week:</strong>
+            {{ task_count }} pending task{% if task_count != 1 %}s{% endif %},
+            {{ reconnect_count }} reconnect{% if reconnect_count != 1 %}s{% endif %} due{% if travel_match_count > 0 %},
+            {{ travel_match_count }} travel match{% if travel_match_count != 1 %}es{% endif %}{% endif %}{% if birthday_count > 0 %},
+            {{ birthday_count }} birthday{% if birthday_count != 1 %}s{% endif %} coming up{% endif %}
         </div>
-        
+
+        {% if dashboard_url %}
+        <div class="dashboard-cta-wrap">
+            <a href="{{ dashboard_url }}" class="dashboard-cta">Edit CRM in browser</a>
+            <p class="dashboard-cta-note">Open Pepper on your laptop to update contacts, snooze reconnects, and refresh travel.</p>
+        </div>
+        {% endif %}
+
+        <h2>Pending Tasks</h2>
         {% if task_count > 0 %}
-        <h2>📋 Pending Tasks</h2>
         {% for task in tasks %}
         <div class="item">
             <div class="item-name">{{ task.contact_name }}</div>
             <div class="item-detail">TODO: {{ task.description }}</div>
         </div>
         {% endfor %}
+        {% else %}
+        <div class="empty-state">No pending tasks this week.</div>
         {% endif %}
-        
+
+        <h2>Reconnects Due</h2>
         {% if reconnect_count > 0 %}
-        <h2>🔔 Reconnects Due</h2>
         {% for reconnect in reconnects %}
         <div class="item">
             <div class="item-name">{{ reconnect.contact_name }}</div>
@@ -127,18 +182,68 @@
             </div>
         </div>
         {% endfor %}
-        <p style="margin-top: 20px; font-size: 14px; color: #666;">
-            📅 Calendar invites attached — import to your calendar to set reminders
-        </p>
+        <p class="footnote">Calendar invites attached — import to your calendar to set reminders.</p>
+        {% else %}
+        <div class="empty-state">No reconnects due this week.</div>
         {% endif %}
-        
-        {% if task_count == 0 and reconnect_count == 0 %}
-        <div class="empty-state">
-            <p style="font-size: 18px;">✨ All caught up!</p>
-            <p>No pending tasks or reconnects this week.</p>
+
+        <h2>Next Week Travel</h2>
+        {% if has_travel_snapshot %}
+            {% if travel_match_count > 0 %}
+            <p class="section-intro">People near your upcoming trips:</p>
+            {% for trip in travel_trips %}
+            <div class="trip-block">
+                <h3>{{ trip.title }} · {{ trip.date_range }}</h3>
+                {% for match in trip.matches %}
+                <div class="item">
+                    <div class="item-name">{{ match.full_name }}</div>
+                    <div class="item-detail">{{ match.detail }}</div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="empty-state">No travel matches for next week.</div>
+            {% endif %}
+        {% else %}
+        <div class="empty-state">No travel snapshot yet — refresh travel from the dashboard when your calendar is connected.</div>
+        {% endif %}
+
+        <h2>Upcoming Birthdays</h2>
+        {% if birthday_count > 0 %}
+        <p class="section-intro">Next {{ birthday_window_days }} days:</p>
+        {% for bday in birthdays %}
+        <div class="item">
+            <div class="item-name">{{ bday.contact_name }}</div>
+            <div class="item-detail">
+                {{ bday.date_label }} · {{ bday.when_label }}{% if bday.age_label != "" %} · {{ bday.age_label }}{% endif %}
+            </div>
         </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-state">No birthdays in the next {{ birthday_window_days }} days.</div>
         {% endif %}
-        
+
+        <h2>Random People of the Week</h2>
+        <p class="section-intro">Week of {{ random_week_label }} — a nudge to remember people in your book.</p>
+        {% if random_pick_count > 0 %}
+        {% for pick in random_picks %}
+        <div class="item">
+            <div class="item-name">{{ pick.full_name }}</div>
+            <div class="item-detail">
+                {% if pick.org != "" %}{{ pick.org }}<br>{% endif %}
+                {% if pick.location != "" %}{{ pick.location }}<br>{% endif %}
+                {% if pick.categories != "" %}Categories: {{ pick.categories }}<br>{% endif %}
+                {% if pick.note != "" %}
+                <div class="note-block">{{ pick.note }}</div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-state">No random picks this week — add more eligible contacts to your book.</div>
+        {% endif %}
+
         <div class="footer">
             Sent by Pepper CRM · Your friendly personal relationship manager<br>
             To update a contact, edit their .vcf file or log an interaction

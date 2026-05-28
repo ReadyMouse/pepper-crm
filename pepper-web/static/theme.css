@@ -13,9 +13,10 @@
 /* Pepper CRM — teal header, grey body, teal accents */
 
 :root {
-    --pepper-teal: #4a9b9e;
-    --pepper-teal-dark: #3d8487;
-    --pepper-teal-light: #5eb3b6;
+    /* Matches pepper_avatar_teal.png background (#4f868b) */
+    --pepper-teal: #4f868b;
+    --pepper-teal-dark: #426f74;
+    --pepper-teal-light: #639ea3;
     --pepper-grey-bg: #e8ecec;
     --pepper-grey-card: #ffffff;
     --pepper-grey-border: #d4dada;
@@ -42,7 +43,7 @@ body {
     background-color: var(--pepper-teal);
     color: white;
     padding: 12px 24px;
-    box-shadow: 0 2px 8px rgba(45, 100, 103, 0.25);
+    box-shadow: 0 2px 8px rgba(79, 134, 139, 0.25);
 }
 
 .header-inner {
@@ -92,6 +93,7 @@ body {
     object-fit: contain;
     display: block;
     flex-shrink: 0;
+    background-color: var(--pepper-teal);
 }
 
 /* —— Layout —— */
@@ -471,6 +473,32 @@ body {
     background: var(--pepper-teal-dark);
 }
 
+.btn-geo {
+    background: var(--pepper-grey-card);
+    color: var(--pepper-teal-dark);
+    border: 1px solid var(--pepper-teal);
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-bottom: 12px;
+}
+
+.btn-geo:hover {
+    background: rgba(74, 155, 158, 0.12);
+}
+
+.travel-geo-meta {
+    color: var(--pepper-text-soft);
+    font-size: 14px;
+    margin: 0 0 10px;
+}
+
+.travel-geo-form {
+    margin-bottom: 8px;
+}
+
 .badge-live {
     background: rgba(74, 155, 158, 0.2);
     color: var(--pepper-teal-dark);
@@ -492,6 +520,15 @@ body {
     color: var(--pepper-text-soft);
     font-size: 13px;
     margin-bottom: 16px;
+}
+
+.digest-email-frame {
+    display: block;
+    width: 100%;
+    min-height: 900px;
+    border: 1px solid var(--pepper-grey-border);
+    border-radius: 8px;
+    background-color: #f5f5f5;
 }
 
 .digest-card {

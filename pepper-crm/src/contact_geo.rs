@@ -17,8 +17,11 @@
 
 use crate::geo::{normalize_geocode_query, GeoPoint, Geocoder, NominatimGeocoder};
 use crate::models::Contact;
-use crate::vcard::{contact_address_query, geocode_queries_for_contact, write_contact_geo};
+use crate::vcard::{
+    contact_address_query, geocode_queries_for_contact, parse_contacts, write_contact_geo,
+};
 use anyhow::Result;
+use std::path::Path;
 use tracing::info;
 
 /// Stats from a geocode-ensure pass (before travel matching).
@@ -29,6 +32,31 @@ pub struct GeocodeEnsureStats {
     pub geocoded: usize,
     pub failed: usize,
     pub failed_cached: usize,
+}
+
+/// Count contacts with usable GEO vs those with an address query.
+pub fn geo_coverage(contacts: &[Contact]) -> (usize, usize) {
+    let mut with_geo = 0usize;
+    let mut with_address = 0usize;
+    for contact in contacts {
+        if contact_address_query(contact).is_none() {
+            continue;
+        }
+        with_address += 1;
+        if contact.geo.is_some() {
+            with_geo += 1;
+        }
+    }
+    (with_geo, with_address)
+}
+
+/// Run a geocode ensure pass when most address contacts lack coordinates (fresh Google export).
+pub fn should_ensure_contact_geo(contacts: &[Contact]) -> bool {
+    let (with_geo, with_address) = geo_coverage(contacts);
+    if with_address == 0 {
+        return false;
+    }
+    with_geo * 100 / with_address < 25
 }
 
 /// True when the contact has an address but no valid GEO for the current address.
@@ -112,6 +140,25 @@ pub async fn ensure_contacts_geocoded(
         );
     }
     Ok(stats)
+}
+
+/// Load contacts from a directory, geocode those that need it, optionally write back to vCards.
+pub async fn ensure_contacts_geocoded_in_dir(
+    contacts_dir: impl AsRef<Path>,
+    cache_root: impl AsRef<Path>,
+    write_back: bool,
+) -> Result<(GeocodeEnsureStats, Vec<Contact>)> {
+    let mut contacts = parse_contacts(contacts_dir.as_ref())?;
+    let (with_geo, with_address) = geo_coverage(&contacts);
+    info!(
+        contacts = contacts.len(),
+        with_address,
+        with_geo,
+        "Starting contact GEO ensure pass"
+    );
+    let geocoder = NominatimGeocoder::from_env(cache_root.as_ref())?;
+    let stats = ensure_contacts_geocoded(&mut contacts, &geocoder, write_back).await?;
+    Ok((stats, contacts))
 }
 
 /// Sync variant for unit tests and `FixedGeocoder` builds.
@@ -254,7 +301,34 @@ mod tests {
             rev: None,
             log_entries: vec![],
             vcf_path: PathBuf::from("/tmp/u1.vcf"),
+            carddav_href: None,
         }
+    }
+
+    #[test]
+    fn should_ensure_geo_when_mostly_missing() {
+        let mut contacts = Vec::new();
+        for i in 0..10 {
+            contacts.push(contact_with_geo(
+                &format!("City{i}"),
+                "MA",
+                None,
+                None,
+            ));
+        }
+        assert!(should_ensure_contact_geo(&contacts));
+        contacts[0].geo = Some(GeoPoint {
+            lat: 42.36,
+            lng: -71.06,
+        });
+        assert!(should_ensure_contact_geo(&contacts));
+        for c in contacts.iter_mut().skip(1) {
+            c.geo = Some(GeoPoint {
+                lat: 42.36,
+                lng: -71.06,
+            });
+        }
+        assert!(!should_ensure_contact_geo(&contacts));
     }
 
     #[test]

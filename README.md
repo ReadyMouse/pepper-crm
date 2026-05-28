@@ -299,7 +299,7 @@ cargo test -p pepper-crm --test generate_test_contacts -- --ignored
 - **Write-back is append-only** — never modifies existing content, only appends
 - **Last tag wins** — most recent `Reconnect:` is authoritative
 - **Dry-run always works** — safe testing without side effects
-- **Prototype locally, promote to Pi** — local files now, CardDAV later
+- **Prototype locally, promote to Pi** — local VCF files by default; set `CARDDAV_*` for Radicale on Pi
 - **stdio now, HTTP/SSE later** — easy development, smooth upgrade path for agents
 
 ## Documentation
@@ -322,9 +322,37 @@ cargo test -p pepper-crm --test generate_test_contacts -- --ignored
 
 Source files include a standard header block (Rust `//!`, HTML/CSS/JS comments, etc.) describing purpose, inputs, outputs, and notes.
 
+## CardDAV (Radicale on Pi)
+
+When `CARDDAV_URL`, `CARDDAV_USER`, and `CARDDAV_PASS` are set, Pepper loads contacts with a CardDAV `addressbook-query` REPORT and writes changes with HTTP PUT (Done buttons, snooze, geocode writeback, weekly pipeline). Local `CONTACTS_DIR` is ignored for reads in that mode.
+
+```bash
+# .env
+CARDDAV_URL=https://your-pi.tailnet:5232/alice/contacts/
+CARDDAV_USER=alice
+CARDDAV_PASS=secret
+# CARDDAV_INSECURE=true   # self-signed TLS on homelab
+
+cargo run -p pepper-crm --example carddav_list
+cargo run -p pepper-web
+```
+
+Pepper PUT → Radicale stores `.vcf` → DAVx5 syncs to phone.
+
+## Raspberry Pi binaries (cross-compile from M3 Mac)
+
+Mac and Pi 5 are both ARM64, but you need **Linux** binaries for the Pi — `cargo build` on macOS produces macOS binaries only.
+
+```bash
+brew install messense/macos-cross-toolchains/aarch64-unknown-linux-gnu
+rustup target add aarch64-unknown-linux-gnu
+./scripts/build-linux-arm64.sh
+```
+
+Copy `target/aarch64-unknown-linux-gnu/release/pepper` and `pepper-web` to the Pi. Alternatively, clone the repo on the Pi and `cargo build --release` there.
+
 ## What's Next
 
-- CardDAV read/write (Radicale on Pi)
 - Random Person of the Week + web enrichment
 - Matrix bot ("chat with Pepper")
 - HTTP/SSE transport for persistent MCP daemons

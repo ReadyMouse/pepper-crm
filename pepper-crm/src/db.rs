@@ -198,6 +198,67 @@ pub async fn upsert_deferred_reconnect(
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PruneStaleResult {
+    pub tasks: u64,
+    pub reconnects: u64,
+}
+
+/// Remove pending tasks/reconnects for contacts not in the current VCF export.
+pub async fn prune_stale_sync_data(pool: &PgPool, current_uids: &[String]) -> Result<PruneStaleResult> {
+    if current_uids.is_empty() {
+        return Ok(PruneStaleResult::default());
+    }
+
+    let task_row = sqlx::query(
+        r#"
+        DELETE FROM tasks t
+        USING contacts c
+        WHERE t.contact_id = c.id
+          AND t.status = 'pending'
+          AND NOT (c.vcard_uid = ANY($1))
+        "#,
+    )
+    .bind(current_uids)
+    .execute(pool)
+    .await
+    .context("Failed to prune stale tasks")?;
+
+    let reconnect_row = sqlx::query(
+        r#"
+        DELETE FROM reconnects r
+        USING contacts c
+        WHERE r.contact_id = c.id
+          AND r.status IN ('pending', 'deferred')
+          AND NOT (c.vcard_uid = ANY($1))
+        "#,
+    )
+    .bind(current_uids)
+    .execute(pool)
+    .await
+    .context("Failed to prune stale reconnects")?;
+
+    Ok(PruneStaleResult {
+        tasks: task_row.rows_affected(),
+        reconnects: reconnect_row.rows_affected(),
+    })
+}
+
+/// Upsert contacts from VCF and drop task/reconnect rows tied to previous exports.
+pub async fn sync_contacts_to_db(pool: &PgPool, contacts: &[Contact]) -> Result<UpsertResult> {
+    let result = upsert_contacts_batch(pool, contacts).await?;
+    let uids: Vec<String> = contacts.iter().map(|c| c.uid.clone()).collect();
+    let pruned = prune_stale_sync_data(pool, &uids).await?;
+    if pruned.tasks > 0 || pruned.reconnects > 0 {
+        debug!(
+            tasks = pruned.tasks,
+            reconnects = pruned.reconnects,
+            "Pruned stale DB rows from previous contact export"
+        );
+    }
+    Ok(result)
+}
+
 /// Sync contacts and their tags to the database
 pub async fn upsert_contacts_batch(pool: &PgPool, contacts: &[Contact]) -> Result<UpsertResult> {
     let mut contacts_upserted = 0;

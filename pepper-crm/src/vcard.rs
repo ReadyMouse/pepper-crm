@@ -10,14 +10,16 @@
 //!   - `Contact` structs; updated VCF files on disk (`GEO`, `NOTE`, reconnect snooze).
 //!
 //! NOTES:
-//!   - `log_interaction` uses local `fs::write`; CardDAV PUT is planned (see TODO in code).
-//!   - Synthesizes UIDs when exports omit `UID:`.
+//!   - When `CARDDAV_*` env vars are set, contacts load via CardDAV REPORT and write via PUT.
+//!   - Otherwise reads/writes local VCF files under `CONTACTS_DIR`.
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use crate::birthdays::parse_bday_value;
+use crate::carddav::{CardDavClient, CardDavConfig};
 use crate::geo::GeoPoint;
 use crate::models::Contact;
+use crate::tasks::remove_todo_from_note;
 use crate::tags::{
     append_log_entry, extract_log_entries, format_month_year_note_prefix, parse_categories_value,
     parse_todos, resolve_reconnect_tag, DO_NOT_ENGAGE_CATEGORY, RECONNECT_CATEGORY_PREFIX,
@@ -27,9 +29,107 @@ use crate::tags::{
 pub const PEPPER_GEO_SOURCE: &str = "X-PEPPER-GEO-SOURCE";
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
+use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tracing::{debug, warn};
+
+static CARDDAV_CLIENT: OnceLock<Option<CardDavClient>> = OnceLock::new();
+
+fn carddav_client() -> Option<&'static CardDavClient> {
+    CARDDAV_CLIENT
+        .get_or_init(|| CardDavConfig::from_env().map(CardDavClient::new))
+        .as_ref()
+}
+
+/// True when `CARDDAV_URL`, `CARDDAV_USER`, and `CARDDAV_PASS` are all set.
+pub fn contacts_use_carddav() -> bool {
+    CardDavConfig::from_env().is_some()
+}
+
+fn contact_storage_label(contact: &Contact) -> String {
+    contact
+        .carddav_href
+        .clone()
+        .unwrap_or_else(|| contact.vcf_path.display().to_string())
+}
+
+fn read_contact_vcf_content(contact: &Contact) -> Result<String> {
+    if let Some(href) = &contact.carddav_href {
+        let client = carddav_client()
+            .context("CARDDAV_* env vars required for CardDAV contact")?;
+        return client
+            .get_resource(href)
+            .with_context(|| format!("Failed to read CardDAV resource {href}"));
+    }
+    fs::read_to_string(&contact.vcf_path)
+        .with_context(|| format!("Failed to read VCF file: {}", contact.vcf_path.display()))
+}
+
+fn write_contact_vcf_content(contact: &Contact, content: &str) -> Result<()> {
+    if contacts_use_carddav() {
+        let client = carddav_client().context("CardDAV client not initialized")?;
+        let put_target = client.put_url_for_contact(
+            contact.carddav_href.as_deref(),
+            &contact.uid,
+        )?;
+        return client.put_resource(&put_target, content).with_context(|| {
+            format!(
+                "Failed to write CardDAV resource for {}",
+                contact_storage_label(contact)
+            )
+        });
+    }
+    fs::write(&contact.vcf_path, content).with_context(|| {
+        format!(
+            "Failed to write VCF file: {}",
+            contact.vcf_path.display()
+        )
+    })
+}
+
+/// Load contacts from CardDAV (when configured) or from VCF files in `contacts_dir`.
+pub fn parse_contacts(contacts_dir: &Path) -> Result<Vec<Contact>> {
+    if let Some(client) = carddav_client() {
+        return parse_vcards_from_carddav(client);
+    }
+    parse_vcards_from_dir(contacts_dir)
+}
+
+fn parse_vcards_from_carddav(client: &CardDavClient) -> Result<Vec<Contact>> {
+    let mut contacts = Vec::new();
+    for (href, content) in client.fetch_all_vcards()? {
+        let filename = href
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("contact.vcf");
+        let vcf_path = PathBuf::from(filename);
+        let blocks = split_vcard_blocks(&content);
+        if blocks.is_empty() {
+            warn!("No BEGIN:VCARD in CardDAV resource {href}");
+            continue;
+        }
+        for (index, block) in blocks.into_iter().enumerate() {
+            match parse_vcard_content_with_index(
+                &block,
+                vcf_path.clone(),
+                Some(index),
+                Some(href.clone()),
+            ) {
+                Ok(contact) => contacts.push(contact),
+                Err(e) => warn!("Skipping vCard #{index} in {href}: {e}"),
+            }
+        }
+    }
+    debug!(
+        "Parsed {} contacts from CardDAV ({})",
+        contacts.len(),
+        client.collection_url()
+    );
+    Ok(contacts)
+}
 
 /// Parse all VCF files in a directory (each file may contain multiple `BEGIN:VCARD` blocks).
 pub fn parse_vcards_from_dir(dir: &Path) -> Result<Vec<Contact>> {
@@ -68,7 +168,7 @@ pub fn parse_vcards_from_path(path: &Path) -> Result<Vec<Contact>> {
 
     let mut contacts = Vec::with_capacity(blocks.len());
     for (index, block) in blocks.into_iter().enumerate() {
-        match parse_vcard_content_with_index(&block, path.to_path_buf(), Some(index)) {
+        match parse_vcard_content_with_index(&block, path.to_path_buf(), Some(index), None) {
             Ok(contact) => contacts.push(contact),
             Err(e) => warn!("Skipping vCard #{} in {}: {}", index, path.display(), e),
         }
@@ -143,13 +243,14 @@ fn split_vcard_blocks(content: &str) -> Vec<String> {
 
 /// Parse VCF content from a string (single vCard block).
 pub fn parse_vcard_content(content: &str, vcf_path: PathBuf) -> Result<Contact> {
-    parse_vcard_content_with_index(content, vcf_path, None)
+    parse_vcard_content_with_index(content, vcf_path, None, None)
 }
 
 fn parse_vcard_content_with_index(
     content: &str,
     vcf_path: PathBuf,
     card_index: Option<usize>,
+    carddav_href: Option<String>,
 ) -> Result<Contact> {
     let unfolded = unfold_vcard_lines(content);
 
@@ -269,6 +370,7 @@ fn parse_vcard_content_with_index(
         rev,
         log_entries,
         vcf_path,
+        carddav_href,
     })
 }
 
@@ -498,8 +600,7 @@ fn parse_geo_value(value: &str) -> Option<GeoPoint> {
 
 /// Write or update `GEO` and [`PEPPER_GEO_SOURCE`] on the contact's vCard block (by UID).
 pub fn write_contact_geo(contact: &Contact, point: GeoPoint, source_query: &str) -> Result<()> {
-    let content = fs::read_to_string(&contact.vcf_path)
-        .with_context(|| format!("Failed to read VCF file: {}", contact.vcf_path.display()))?;
+    let content = read_contact_vcf_content(contact)?;
 
     let blocks = split_vcard_blocks(&content);
     let mut found = false;
@@ -519,21 +620,21 @@ pub fn write_contact_geo(contact: &Contact, point: GeoPoint, source_query: &str)
         anyhow::bail!(
             "UID {} not found in {}",
             contact.uid,
-            contact.vcf_path.display()
+            contact_storage_label(contact)
         );
     }
 
     let updated_content = join_vcard_blocks(&updated_blocks);
-    fs::write(&contact.vcf_path, updated_content).with_context(|| {
+    write_contact_vcf_content(contact, &updated_content).with_context(|| {
         format!(
-            "Failed to write GEO to VCF file: {}",
-            contact.vcf_path.display()
+            "Failed to write GEO to {}",
+            contact_storage_label(contact)
         )
     })?;
 
     debug!(
         "Wrote GEO to {} for {}",
-        contact.vcf_path.display(),
+        contact_storage_label(contact),
         contact.uid
     );
     Ok(())
@@ -776,8 +877,10 @@ fn unfold_vcard_lines(content: &str) -> String {
 fn normalize_note_field(note: &str) -> String {
     let mut result = note.to_string();
     
-    // Add newline before TODO: if it's not at the start
-    result = result.replace("TODO:", "\nTODO:");
+    // Add newline before TODO: (any casing) if it's not at the start
+    static TODO_PREFIX: OnceLock<Regex> = OnceLock::new();
+    let todo_re = TODO_PREFIX.get_or_init(|| Regex::new(r"(?i)TODO:").expect("todo prefix regex"));
+    result = todo_re.replace_all(&result, "\nTODO:").into_owned();
     // Add newline before Reconnect: if it's not at the start  
     result = result.replace("Reconnect:", "\nReconnect:");
     // Add newline before --- CRM Log ---
@@ -791,9 +894,9 @@ fn normalize_note_field(note: &str) -> String {
     result
 }
 
-/// Find a contact by UID across all VCF files in a directory.
+/// Find a contact by UID (CardDAV or local VCF directory).
 pub fn find_contact_by_uid(contacts_dir: &Path, uid: &str) -> Result<Contact> {
-    for contact in parse_vcards_from_dir(contacts_dir)? {
+    for contact in parse_contacts(contacts_dir)? {
         if contact.uid == uid {
             return Ok(contact);
         }
@@ -820,8 +923,7 @@ pub fn set_reconnect_snooze(contact: &Contact, reconnect_body: &str, as_of: Naiv
     let updated_note = prepend_note_line(&contact.note_raw, &stamp);
     let updated_categories = upsert_reconnect_categories(&contact.categories, reconnect_body);
 
-    let content = fs::read_to_string(&contact.vcf_path)
-        .with_context(|| format!("Failed to read VCF file: {}", contact.vcf_path.display()))?;
+    let content = read_contact_vcf_content(contact)?;
 
     let blocks = split_vcard_blocks(&content);
     let mut found = false;
@@ -841,23 +943,32 @@ pub fn set_reconnect_snooze(contact: &Contact, reconnect_body: &str, as_of: Naiv
         anyhow::bail!(
             "UID {} not found in {}",
             contact.uid,
-            contact.vcf_path.display()
+            contact_storage_label(contact)
         );
     }
 
-    fs::write(&contact.vcf_path, join_vcard_blocks(&updated_blocks)).with_context(|| {
+    write_contact_vcf_content(contact, &join_vcard_blocks(&updated_blocks)).with_context(|| {
         format!(
             "Failed to write reconnect snooze to {}",
-            contact.vcf_path.display()
+            contact_storage_label(contact)
         )
     })?;
 
     debug!(
         "Set reconnect snooze on {} for {}",
-        contact.vcf_path.display(),
+        contact_storage_label(contact),
         contact.uid
     );
     Ok(())
+}
+
+/// Mark a TODO done by removing its line from the vCard NOTE field.
+pub fn complete_task(contact: &Contact, todo_body: &str) -> Result<()> {
+    let updated_note = remove_todo_from_note(&contact.note_raw, todo_body);
+    if updated_note == contact.note_raw {
+        anyhow::bail!("TODO not found on contact");
+    }
+    set_contact_note(contact, &updated_note)
 }
 
 /// Replace the vCard `NOTE` field (used when enriching a contact from the dashboard).
@@ -867,8 +978,7 @@ pub fn set_contact_note(contact: &Contact, note: &str) -> Result<()> {
         anyhow::bail!("Note cannot be empty");
     }
 
-    let content = fs::read_to_string(&contact.vcf_path)
-        .with_context(|| format!("Failed to read VCF file: {}", contact.vcf_path.display()))?;
+    let content = read_contact_vcf_content(contact)?;
 
     let blocks = split_vcard_blocks(&content);
     let mut found = false;
@@ -888,20 +998,20 @@ pub fn set_contact_note(contact: &Contact, note: &str) -> Result<()> {
         anyhow::bail!(
             "UID {} not found in {}",
             contact.uid,
-            contact.vcf_path.display()
+            contact_storage_label(contact)
         );
     }
 
-    fs::write(&contact.vcf_path, join_vcard_blocks(&updated_blocks)).with_context(|| {
+    write_contact_vcf_content(contact, &join_vcard_blocks(&updated_blocks)).with_context(|| {
         format!(
             "Failed to write note to {}",
-            contact.vcf_path.display()
+            contact_storage_label(contact)
         )
     })?;
 
     debug!(
         "Set note on {} for {}",
-        contact.vcf_path.display(),
+        contact_storage_label(contact),
         contact.uid
     );
     Ok(())
@@ -915,8 +1025,7 @@ pub fn set_contact_location(contact: &Contact, city: &str, state: Option<&str>) 
     }
     let state = state.map(str::trim).filter(|s| !s.is_empty());
 
-    let content = fs::read_to_string(&contact.vcf_path)
-        .with_context(|| format!("Failed to read VCF file: {}", contact.vcf_path.display()))?;
+    let content = read_contact_vcf_content(contact)?;
 
     let blocks = split_vcard_blocks(&content);
     let mut found = false;
@@ -936,20 +1045,20 @@ pub fn set_contact_location(contact: &Contact, city: &str, state: Option<&str>) 
         anyhow::bail!(
             "UID {} not found in {}",
             contact.uid,
-            contact.vcf_path.display()
+            contact_storage_label(contact)
         );
     }
 
-    fs::write(&contact.vcf_path, join_vcard_blocks(&updated_blocks)).with_context(|| {
+    write_contact_vcf_content(contact, &join_vcard_blocks(&updated_blocks)).with_context(|| {
         format!(
             "Failed to write location to {}",
-            contact.vcf_path.display()
+            contact_storage_label(contact)
         )
     })?;
 
     debug!(
         "Set location on {} for {}",
-        contact.vcf_path.display(),
+        contact_storage_label(contact),
         contact.uid
     );
     Ok(())
@@ -1085,8 +1194,7 @@ fn set_do_not_engage(contact: &Contact, as_of: NaiveDate) -> Result<()> {
     let updated_note = prepend_note_line(&contact.note_raw, &stamp);
     let updated_categories = upsert_do_not_engage_categories(&contact.categories);
 
-    let content = fs::read_to_string(&contact.vcf_path)
-        .with_context(|| format!("Failed to read VCF file: {}", contact.vcf_path.display()))?;
+    let content = read_contact_vcf_content(contact)?;
 
     let blocks = split_vcard_blocks(&content);
     let mut found = false;
@@ -1106,20 +1214,20 @@ fn set_do_not_engage(contact: &Contact, as_of: NaiveDate) -> Result<()> {
         anyhow::bail!(
             "UID {} not found in {}",
             contact.uid,
-            contact.vcf_path.display()
+            contact_storage_label(contact)
         );
     }
 
-    fs::write(&contact.vcf_path, join_vcard_blocks(&updated_blocks)).with_context(|| {
+    write_contact_vcf_content(contact, &join_vcard_blocks(&updated_blocks)).with_context(|| {
         format!(
             "Failed to write Do Not Engage to {}",
-            contact.vcf_path.display()
+            contact_storage_label(contact)
         )
     })?;
 
     debug!(
         "Set Do Not Engage on {} for {}",
-        contact.vcf_path.display(),
+        contact_storage_label(contact),
         contact.uid
     );
     Ok(())
@@ -1176,29 +1284,25 @@ fn upsert_reconnect_in_block(
     out
 }
 
-/// Write a log entry back to the contact's VCF file
-/// This is the local file write-back for prototyping
-/// TODO: CardDAV - replace this with an HTTP PUT to Radicale
+/// Write a log entry back to the contact's vCard (local file or CardDAV PUT).
 pub fn log_interaction(
     contact: &Contact,
     note: &str,
     new_reconnect_tag: Option<&str>,
 ) -> Result<()> {
-    // Read the current VCF file
-    let content = fs::read_to_string(&contact.vcf_path)
-        .with_context(|| format!("Failed to read VCF file: {}", contact.vcf_path.display()))?;
-    
-    // Update the NOTE field
+    let content = read_contact_vcf_content(contact)?;
+
     let updated_note = append_log_entry(&contact.note_raw, note, new_reconnect_tag);
     let updated_content = update_note_field(&content, &updated_note)?;
-    
-    // Write back to file
-    // TODO: CardDAV - replace fs::write with HTTP PUT to https://[pi-ip]/[user]/contacts/[uid].vcf
-    // Use HTTP Basic auth with CARDDAV_URL, CARDDAV_USER, CARDDAV_PASS from .env
-    fs::write(&contact.vcf_path, updated_content)
-        .with_context(|| format!("Failed to write VCF file: {}", contact.vcf_path.display()))?;
-    
-    debug!("Logged interaction to {}", contact.vcf_path.display());
+
+    write_contact_vcf_content(contact, &updated_content).with_context(|| {
+        format!(
+            "Failed to write interaction to {}",
+            contact_storage_label(contact)
+        )
+    })?;
+
+    debug!("Logged interaction to {}", contact_storage_label(contact));
     Ok(())
 }
 
@@ -1263,8 +1367,8 @@ FN:Bob
 END:VCARD"#;
         let blocks = split_vcard_blocks(content);
         assert_eq!(blocks.len(), 2);
-        let c1 = parse_vcard_content_with_index(&blocks[0], PathBuf::from("/tmp/a.vcf"), Some(0)).unwrap();
-        let c2 = parse_vcard_content_with_index(&blocks[1], PathBuf::from("/tmp/a.vcf"), Some(1)).unwrap();
+        let c1 = parse_vcard_content_with_index(&blocks[0], PathBuf::from("/tmp/a.vcf"), Some(0), None).unwrap();
+        let c2 = parse_vcard_content_with_index(&blocks[1], PathBuf::from("/tmp/a.vcf"), Some(1), None).unwrap();
         assert_eq!(c1.full_name, "Alice");
         assert_eq!(c2.full_name, "Bob");
     }
@@ -1379,7 +1483,7 @@ END:VCARD"#;
         assert!(updated.contains("GEO:42.36;-71.06"));
         assert!(updated.contains(&format!("UID:{}", contacts[0].uid)));
         let blocks = split_vcard_blocks(&updated);
-        let alice = parse_vcard_content_with_index(&blocks[0], path.clone(), Some(0)).unwrap();
+        let alice = parse_vcard_content_with_index(&blocks[0], path.clone(), Some(0), None).unwrap();
         assert_eq!(alice.geo, Some(point));
         let _ = fs::remove_dir_all(&dir);
     }

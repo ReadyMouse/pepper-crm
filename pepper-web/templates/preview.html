@@ -3,9 +3,9 @@
 
     Live in-browser preview of the weekly email digest content.
 
-  INPUT: Tera context — date, tasks[], reconnects[], task_count, reconnect_count.
-  OUTPUT: Narrow-layout HTML page styled like the email digest (theme.css digest-card).
-  NOTES: Read-only preview; actual email uses templates/digest.html at repo root.
+  INPUT: Tera context — nav_active.
+  OUTPUT: Dashboard chrome with iframe loading /preview/email (exact digest HTML).
+  NOTES: Read-only preview; iframe avoids escaping issues with inline email HTML.
 
   Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 -->
@@ -21,54 +21,12 @@
     {% include "partials/header.html" %}
 
     <div class="page-container page-container--narrow">
-        <p class="preview-label">Live preview — this is what the weekly email will contain</p>
-        <div class="digest-card">
-            <h1>Pepper CRM Weekly Digest</h1>
-            <div class="date">{{ date }}</div>
-
-            <div class="digest-summary">
-                <strong>This week:</strong> {{ task_count }} pending task{% if task_count != 1 %}s{% endif %},
-                {{ reconnect_count }} reconnect{% if reconnect_count != 1 %}s{% endif %} due
-            </div>
-
-            {% if task_count > 0 %}
-            <h2>Pending Tasks</h2>
-            {% for task in tasks %}
-            <div class="digest-item">
-                <div class="digest-item-name">{{ task.contact_name }}</div>
-                <div class="digest-item-detail">TODO: {{ task.description }}</div>
-            </div>
-            {% endfor %}
-            {% endif %}
-
-            {% if reconnect_count > 0 %}
-            <h2>Reconnects Due</h2>
-            {% for reconnect in reconnects %}
-            <div class="digest-item">
-                <div class="digest-item-name">{{ reconnect.contact_name }}</div>
-                <div class="digest-item-detail">
-                    Due: {{ reconnect.due_date }}<br>
-                    Tag: {{ reconnect.tag }}
-                </div>
-            </div>
-            {% endfor %}
-            <p style="margin-top: 20px; font-size: 14px; color: var(--pepper-text-soft);">
-                Calendar invites attached — import to your calendar to set reminders
-            </p>
-            {% endif %}
-
-            {% if task_count == 0 and reconnect_count == 0 %}
-            <div class="empty-state">
-                <p style="font-size: 18px;">All caught up!</p>
-                <p>No pending tasks or reconnects this week.</p>
-            </div>
-            {% endif %}
-
-            <div class="digest-footer">
-                Sent by Pepper CRM · Your friendly personal relationship manager<br>
-                To update a contact, edit their .vcf file or log an interaction
-            </div>
-        </div>
+        <p class="preview-label">Live preview — this is exactly how the weekly email will look</p>
+        <iframe
+            class="digest-email-frame"
+            title="Weekly digest email preview"
+            src="/preview/email"
+        ></iframe>
     </div>
 </body>
 </html>

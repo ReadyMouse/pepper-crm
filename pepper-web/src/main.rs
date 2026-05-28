@@ -2,9 +2,9 @@
 //!
 //!   Axum HTTP server for visualizing Pepper CRM data: tasks, reconnects, and travel matches.
 //!
-//! INPUT: DATABASE_URL, CONTACTS_DIR, CACHE_DIR, GOOGLE_CALENDAR_ICS_URL (optional); VCF files; PostgreSQL.
-//! OUTPUT: Routes `/`, `/preview`, `/travel/refresh`, `/travel/snooze`, `/random/shuffle`; static assets.
-//! NOTES: Syncs VCF → PostgreSQL on startup; travel snapshot built on demand, not every page load.
+//! INPUT: CONTACTS_DIR, CACHE_DIR, GOOGLE_CALENDAR_ICS_URL (optional); VCF files.
+//! OUTPUT: Routes `/`, `/preview`, `/travel/refresh`, `/travel/snooze`, `/tasks/complete`, `/random/shuffle`; static assets.
+//! NOTES: Contacts and tasks live in VCF only (no PostgreSQL).
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
@@ -19,18 +19,17 @@ use axum::{
 use serde::Deserialize;
 use chrono::Local;
 use pepper_crm::{
-    build_travel_week_snapshot, due_reconnects_from_contacts, fetch_ics, find_contact_by_uid,
-    get_due_tasks,
-    is_do_not_engage, trips_for_next_week, upcoming_birthdays_from_contacts, BIRTHDAY_WINDOW_DAYS,
-    km_to_miles, load_current_snapshot, miles_to_km, parse_vcards_from_dir,
+    build_travel_week_snapshot, complete_task, ensure_contacts_geocoded_in_dir,
+    fetch_due_items, fetch_ics, find_contact_by_uid,
+    trips_for_next_week, upcoming_birthdays_from_contacts, BIRTHDAY_WINDOW_DAYS,
+    km_to_miles, load_current_snapshot, miles_to_km, parse_contacts, contacts_use_carddav,
     resolve_random_picks, shuffle_and_save, remove_contact_from_current_snapshot,
-    set_random_pick_category,
-    upsert_contacts_batch, DueReconnectInfo, MatchReason, RandomPickInfo, RandomPickWeek,
+    dismiss_random_pick, set_random_pick_category, build_digest_input_from_due, render_digest_email,
+    load_dotenv, DueReconnectInfo, MatchReason, RandomPickInfo, RandomPickWeek,
     RANDOM_PICK_COUNT, TravelBuildConfig, TravelWeekSnapshot, DEFAULT_METRO_RADIUS_MI,
     DO_NOT_ENGAGE_CATEGORY, RECONNECT_SNOOZE_OPTIONS,
 };
 use serde::Serialize;
-use sqlx::PgPool;
 use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
@@ -43,16 +42,16 @@ const RECONNECT_WINDOW_DAYS: u32 = 7;
 
 #[derive(Clone)]
 struct AppState {
-    pool: PgPool,
     tera: Tera,
     cache_root: PathBuf,
     contacts_dir: PathBuf,
-    /// Parsed VCF contacts (reloaded after sync/snooze). Avoids re-parsing on each request.
+    /// Parsed VCF contacts (reloaded after edits). Avoids re-parsing on each request.
     contacts: Arc<RwLock<Arc<Vec<pepper_crm::Contact>>>>,
 }
 
 #[derive(Serialize)]
 struct TaskView {
+    uid: String,
     contact_name: String,
     description: String,
 }
@@ -108,8 +107,13 @@ struct DashboardQuery {
     refreshed: Option<String>,
     travel_error: Option<String>,
     snoozed: Option<String>,
+    task_completed: Option<String>,
     random_shuffled: Option<String>,
     random_category_saved: Option<String>,
+    geocoded: Option<String>,
+    geo_error: Option<String>,
+    geo_count: Option<String>,
+    geo_failed: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,6 +127,12 @@ struct TravelRefreshForm {
 struct TravelSnoozeForm {
     uid: String,
     reconnect: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskCompleteForm {
+    uid: String,
+    description: String,
 }
 
 #[derive(Serialize)]
@@ -158,12 +168,13 @@ struct TravelTripView {
     matches: Vec<TravelMatchView>,
 }
 
-fn task_views(tasks: Vec<pepper_crm::TaskRow>) -> Vec<TaskView> {
+fn task_views(tasks: Vec<pepper_crm::PendingTaskInfo>) -> Vec<TaskView> {
     tasks
         .into_iter()
         .map(|t| TaskView {
+            uid: t.uid,
             contact_name: t.full_name,
-            description: t.body,
+            description: t.description,
         })
         .collect()
 }
@@ -217,14 +228,27 @@ fn contacts_snapshot(state: &AppState) -> Arc<Vec<pepper_crm::Contact>> {
     state.contacts.read().expect("contacts lock poisoned").clone()
 }
 
+fn contact_by_uid(state: &AppState, uid: &str) -> Result<pepper_crm::Contact, String> {
+    let contacts = state.contacts.read().expect("contacts lock poisoned");
+    if let Some(contact) = contacts.iter().find(|c| c.uid == uid) {
+        return Ok(contact.clone());
+    }
+    drop(contacts);
+    find_contact_by_uid(&state.contacts_dir, uid).map_err(|e| format!("Contact not found: {e}"))
+}
+
 /// Parse VCF on a blocking thread — large exports overflow the default tokio worker stack.
 async fn parse_contacts_blocking(contacts_dir: PathBuf) -> Result<Arc<Vec<pepper_crm::Contact>>> {
     tokio::task::spawn_blocking(move || {
-        if !contacts_dir.exists() {
+        if !contacts_use_carddav() && !contacts_dir.exists() {
             return Ok(Arc::new(Vec::new()));
         }
-        let contacts = parse_vcards_from_dir(&contacts_dir).with_context(|| {
-            format!("Failed to parse VCF files in {}", contacts_dir.display())
+        let contacts = parse_contacts(&contacts_dir).with_context(|| {
+            if contacts_use_carddav() {
+                "Failed to parse contacts from CardDAV".to_string()
+            } else {
+                format!("Failed to parse VCF files in {}", contacts_dir.display())
+            }
         })?;
         Ok(Arc::new(contacts))
     })
@@ -239,13 +263,7 @@ fn fetch_random_picks(contacts: &Arc<Vec<pepper_crm::Contact>>, cache_root: &Pat
 
 async fn reload_contacts_cache(state: &AppState) -> Result<()> {
     let contacts = parse_contacts_blocking(state.contacts_dir.clone()).await?;
-    if !contacts.is_empty() {
-        let result = upsert_contacts_batch(&state.pool, contacts.as_ref()).await?;
-        info!(
-            "Reloaded {} contacts ({} tasks, {} reconnects)",
-            result.contacts_upserted, result.tasks_created, result.reconnects_created
-        );
-    }
+    info!("Reloaded {} contacts from {}", contacts.len(), if contacts_use_carddav() { "CardDAV" } else { "VCF" });
     *state.contacts.write().expect("contacts lock poisoned") = contacts;
     Ok(())
 }
@@ -343,58 +361,28 @@ fn snapshot_to_views(snapshot: &TravelWeekSnapshot) -> (Vec<TravelTripView>, usi
     (trips, total)
 }
 
-async fn sync_contacts_from_vcf(
-    pool: &PgPool,
-    contacts_dir: &PathBuf,
-) -> Result<Arc<Vec<pepper_crm::Contact>>> {
+async fn load_contacts_from_vcf(contacts_dir: &PathBuf) -> Result<Arc<Vec<pepper_crm::Contact>>> {
     if !contacts_dir.exists() {
         info!(
-            "Contacts directory {} not found, skipping VCF sync",
+            "Contacts directory {} not found, starting with empty contact list",
             contacts_dir.display()
         );
         return Ok(Arc::new(Vec::new()));
     }
 
     let contacts = parse_contacts_blocking(contacts_dir.clone()).await?;
-
-    if contacts.is_empty() {
-        info!("No VCF contacts found in {}", contacts_dir.display());
-        return Ok(contacts);
-    }
-
-    let result = upsert_contacts_batch(pool, contacts.as_ref()).await?;
     info!(
-        "Synced {} contacts ({} tasks, {} reconnects) from {}",
-        result.contacts_upserted,
-        result.tasks_created,
-        result.reconnects_created,
+        "Loaded {} contacts from {}",
+        contacts.len(),
         contacts_dir.display()
     );
-
     Ok(contacts)
 }
 
-async fn fetch_due(
-    pool: &PgPool,
-    contacts: &Arc<Vec<pepper_crm::Contact>>,
-) -> Result<(Vec<TaskView>, Vec<ReconnectView>)> {
-    let today = Local::now().date_naive();
-    let blocked_uids: std::collections::HashSet<&str> = contacts
-        .iter()
-        .filter(|c| is_do_not_engage(&c.categories))
-        .map(|c| c.uid.as_str())
-        .collect();
-    let tasks = get_due_tasks(pool, today)
-        .await?
-        .into_iter()
-        .filter(|t| !blocked_uids.contains(t.vcard_uid.as_str()))
-        .collect();
-    let reconnects = reconnect_views(due_reconnects_from_contacts(
-        contacts,
-        today,
-        RECONNECT_WINDOW_DAYS,
-    ));
-    Ok((task_views(tasks), reconnects))
+fn fetch_due(contacts: &Arc<Vec<pepper_crm::Contact>>) -> (Vec<TaskView>, Vec<ReconnectView>) {
+    let as_of = Local::now().date_naive();
+    let (tasks, reconnects) = fetch_due_items(contacts, as_of);
+    (task_views(tasks), reconnect_views(reconnects))
 }
 
 fn insert_travel_context(context: &mut TeraContext, snapshot: Option<&TravelWeekSnapshot>) {
@@ -497,7 +485,7 @@ async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<St
     let as_of = Local::now().date_naive();
     let snapshot = load_current_snapshot(&state.cache_root, as_of)?;
     let contacts = contacts_snapshot(&state);
-    let (tasks, reconnects) = fetch_due(&state.pool, &contacts).await?;
+    let (tasks, reconnects) = fetch_due(&contacts);
     let birthdays = birthday_views(upcoming_birthdays_from_contacts(
         &contacts,
         as_of,
@@ -510,6 +498,7 @@ async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<St
     let random_fewer_than_target = random_pick_count < RANDOM_PICK_COUNT;
     let travel_just_refreshed = query.refreshed.as_deref() == Some("1");
     let reconnect_snoozed = query.snoozed.as_deref() == Some("1");
+    let task_completed = query.task_completed.as_deref() == Some("1");
     let random_just_shuffled = query.random_shuffled.as_deref() == Some("1");
     let random_category_saved = query.random_category_saved.as_deref() == Some("1");
 
@@ -522,6 +511,7 @@ async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<St
     context.insert("reconnect_count", &reconnects.len());
     context.insert("reconnect_window_days", &RECONNECT_WINDOW_DAYS);
     context.insert("reconnect_snoozed", &reconnect_snoozed);
+    context.insert("task_completed", &task_completed);
     context.insert("random_picks", &random_picks);
     context.insert("random_pick_count", &random_pick_count);
     context.insert("random_week_label", &random_week.week_label);
@@ -546,6 +536,31 @@ async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<St
         "travel_refresh_error",
         &query.travel_error.as_deref().is_some(),
     );
+    let geo_just_finished = query.geocoded.as_deref() == Some("1");
+    context.insert("geo_just_finished", &geo_just_finished);
+    context.insert("geo_refresh_error", &query.geo_error.as_deref().is_some());
+    context.insert(
+        "geo_geocoded_count",
+        &query
+            .geo_count
+            .as_deref()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0),
+    );
+    context.insert(
+        "geo_failed_count",
+        &query
+            .geo_failed
+            .as_deref()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0),
+    );
+    let (geo_with_coords, geo_with_address) = {
+        let contacts = contacts_snapshot(state);
+        pepper_crm::geo_coverage(contacts.as_ref())
+    };
+    context.insert("geo_with_coords", &geo_with_coords);
+    context.insert("geo_with_address", &geo_with_address);
 
     Ok(state.tera.render("dashboard.html", &context)?)
 }
@@ -570,11 +585,13 @@ async fn apply_random_pick_category(state: &AppState, form: &TravelSnoozeForm) -
     }
 
     let as_of = Local::now().date_naive();
-    let contact = find_contact_by_uid(&state.contacts_dir, &form.uid)
-        .map_err(|e| format!("Contact not found: {e}"))?;
+    let contact = contact_by_uid(state, &form.uid)?;
 
     set_random_pick_category(&contact, choice, as_of)
         .map_err(|e| format!("Failed to update contact: {e}"))?;
+
+    dismiss_random_pick(&state.cache_root, as_of, &form.uid)
+        .map_err(|e| format!("Failed to dismiss random pick: {e}"))?;
 
     reload_contact_after_vcf_edit(state, &form.uid).await;
 
@@ -583,13 +600,98 @@ async fn apply_random_pick_category(state: &AppState, form: &TravelSnoozeForm) -
 
 async fn random_category(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     axum::Form(form): axum::Form<TravelSnoozeForm>,
 ) -> Response {
+    let wants_json = snooze_wants_json(&headers);
+    let uid = form.uid.clone();
+
     match apply_random_pick_category(&state, &form).await {
-        Ok(()) => Redirect::to("/?random_category_saved=1").into_response(),
+        Ok(()) => {
+            if wants_json {
+                Json(SnoozeJsonResponse {
+                    ok: true,
+                    uid,
+                    error: None,
+                })
+                .into_response()
+            } else {
+                Redirect::to("/?random_category_saved=1").into_response()
+            }
+        }
         Err(message) => {
-            tracing::error!("Random pick category failed for {}: {}", form.uid, message);
-            Redirect::to("/?travel_error=1").into_response()
+            tracing::error!("Random pick category failed for {}: {}", uid, message);
+            if wants_json {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(SnoozeJsonResponse {
+                        ok: false,
+                        uid,
+                        error: Some(message),
+                    }),
+                )
+                    .into_response()
+            } else {
+                Redirect::to("/?travel_error=1").into_response()
+            }
+        }
+    }
+}
+
+async fn apply_task_complete(state: &AppState, form: &TaskCompleteForm) -> Result<(), String> {
+    let description = form.description.trim();
+    if description.is_empty() {
+        return Err("Missing task description.".into());
+    }
+
+    let contact = contact_by_uid(state, &form.uid)?;
+
+    complete_task(&contact, description).map_err(|e| format!("Failed to update contact: {e}"))?;
+
+    reload_contact_after_vcf_edit(state, &form.uid).await;
+
+    Ok(())
+}
+
+async fn task_complete(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::Form(form): axum::Form<TaskCompleteForm>,
+) -> Response {
+    let wants_json = snooze_wants_json(&headers);
+    let uid = form.uid.clone();
+    let description = form.description.clone();
+
+    match apply_task_complete(&state, &form).await {
+        Ok(()) => {
+            if wants_json {
+                Json(SnoozeJsonResponse {
+                    ok: true,
+                    uid,
+                    error: None,
+                })
+                .into_response()
+            } else {
+                Redirect::to("/?task_completed=1").into_response()
+            }
+        }
+        Err(message) => {
+            tracing::error!(
+                "Task complete failed for {} ({}): {}",
+                uid,
+                description,
+                message
+            );
+            if wants_json {
+                Json(SnoozeJsonResponse {
+                    ok: false,
+                    uid,
+                    error: Some(message),
+                })
+                .into_response()
+            } else {
+                Redirect::to("/?travel_error=1").into_response()
+            }
         }
     }
 }
@@ -604,8 +706,7 @@ async fn apply_travel_snooze(state: &AppState, form: &TravelSnoozeForm) -> Resul
     }
 
     let as_of = Local::now().date_naive();
-    let contact = find_contact_by_uid(&state.contacts_dir, &form.uid)
-        .map_err(|e| format!("Contact not found: {e}"))?;
+    let contact = contact_by_uid(state, &form.uid)?;
 
     set_random_pick_category(&contact, reconnect, as_of)
         .map_err(|e| format!("Failed to update contact: {e}"))?;
@@ -691,6 +792,49 @@ async fn random_shuffle(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
+fn geo_write_to_vcf_enabled() -> bool {
+    std::env::var("GEO_WRITE_TO_VCF")
+        .map(|s| {
+            let lower = s.to_lowercase();
+            lower != "0" && lower != "false" && lower != "no"
+        })
+        .unwrap_or(true)
+}
+
+async fn contacts_geocode(State(state): State<Arc<AppState>>) -> Response {
+    let contacts_dir = state.contacts_dir.clone();
+    let cache_root = state.cache_root.clone();
+    let write_back = geo_write_to_vcf_enabled();
+
+    info!(
+        write_back,
+        "Starting contact GEO pass (Nominatim ~1 req/sec; large exports take 15+ minutes)..."
+    );
+
+    match ensure_contacts_geocoded_in_dir(&contacts_dir, &cache_root, write_back).await {
+        Ok((stats, contacts)) => {
+            *state.contacts.write().expect("contacts lock poisoned") = Arc::new(contacts);
+            info!(
+                geocoded = stats.geocoded,
+                already_ok = stats.already_ok,
+                failed = stats.failed,
+                failed_cached = stats.failed_cached,
+                skipped = stats.skipped_no_address,
+                "Contact GEO pass finished"
+            );
+            Redirect::to(&format!(
+                "/?geocoded=1&geo_count={}&geo_failed={}",
+                stats.geocoded, stats.failed
+            ))
+            .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Contact GEO pass failed: {}", e);
+            Redirect::to("/?geo_error=1").into_response()
+        }
+    }
+}
+
 async fn travel_refresh(
     State(state): State<Arc<AppState>>,
     axum::Form(form): axum::Form<TravelRefreshForm>,
@@ -737,42 +881,50 @@ async fn travel_refresh(
 }
 
 async fn digest_preview(State(state): State<Arc<AppState>>) -> Response {
-    match render_digest_preview(&state).await {
+    let mut context = TeraContext::new();
+    context.insert("nav_active", "preview");
+
+    match state.tera.render("preview.html", &context) {
         Ok(html) => Html(html).into_response(),
         Err(e) => {
-            tracing::error!("Error rendering digest preview: {}", e);
+            tracing::error!("Error rendering digest preview page: {}", e);
             Html(format!("<h1>Error</h1><p>{}</p>", e)).into_response()
         }
     }
 }
 
-async fn render_digest_preview(state: &AppState) -> Result<String> {
-    let contacts = contacts_snapshot(&state);
-    let (tasks, reconnects) = fetch_due(&state.pool, &contacts).await?;
+async fn digest_preview_email(State(state): State<Arc<AppState>>) -> Response {
+    match render_digest_email_html(&state).await {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("Error rendering digest email preview: {}", e);
+            Html(format!("<h1>Error</h1><p>{}</p>", e)).into_response()
+        }
+    }
+}
 
-    let mut context = TeraContext::new();
-    context.insert("nav_active", "preview");
-    context.insert("tasks", &tasks);
-    context.insert("reconnects", &reconnects);
-    context.insert("date", &Local::now().format("%B %d, %Y").to_string());
-    context.insert("task_count", &tasks.len());
-    context.insert("reconnect_count", &reconnects.len());
-
-    Ok(state.tera.render("preview.html", &context)?)
+async fn render_digest_email_html(state: &AppState) -> Result<String> {
+    let contacts = contacts_snapshot(state);
+    let as_of = Local::now().date_naive();
+    let (task_rows, reconnect_infos) = fetch_due_items(&contacts, as_of);
+    let snapshot = load_current_snapshot(&state.cache_root, as_of)?;
+    let digest_input = build_digest_input_from_due(
+        &task_rows,
+        &reconnect_infos,
+        contacts.as_ref(),
+        snapshot.as_ref(),
+        &state.cache_root,
+        as_of,
+    )?;
+    Ok(render_digest_email(&digest_input)?.html)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    dotenvy::dotenv().ok();
+    load_dotenv()?;
 
     info!("Starting Pepper Web Dashboard...");
-
-    let database_url =
-        std::env::var("DATABASE_URL").context("DATABASE_URL must be set in .env")?;
-
-    let pool = PgPool::connect(&database_url).await?;
-    info!("Connected to database");
 
     let contacts_dir = std::env::var("CONTACTS_DIR")
         .map(PathBuf::from)
@@ -781,14 +933,13 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(".cache"));
 
-    let contacts = sync_contacts_from_vcf(&pool, &contacts_dir).await?;
+    let contacts = load_contacts_from_vcf(&contacts_dir).await?;
 
     let mut tera = Tera::new("pepper-web/templates/**/*.html")?;
     tera.autoescape_on(vec!["html"]);
     info!("Loaded templates");
 
     let state = Arc::new(AppState {
-        pool,
         tera,
         cache_root,
         contacts_dir,
@@ -798,10 +949,13 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/travel/refresh", post(travel_refresh))
+        .route("/contacts/geocode", post(contacts_geocode))
         .route("/travel/snooze", post(travel_snooze))
+        .route("/tasks/complete", post(task_complete))
         .route("/random/shuffle", post(random_shuffle))
         .route("/random/category", post(random_category))
         .route("/preview", get(digest_preview))
+        .route("/preview/email", get(digest_preview_email))
         .nest_service("/static", ServeDir::new("pepper-web/static"))
         .nest_service("/assets", ServeDir::new("assets"))
         .layer(TraceLayer::new_for_http())

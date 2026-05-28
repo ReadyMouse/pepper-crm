@@ -9,8 +9,7 @@
 #   - `mcp-digest-server` binary exposing the `render_digest` MCP tool
 #
 # NOTES:
-#   - Uses Tera templates from `templates/**/*.html` at runtime
-#   - No pepper-crm dependency; task/reconnect shapes are defined locally
+#   - Delegates rendering to pepper-crm::render_digest_email
 #
 # Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
@@ -25,14 +24,9 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace dependencies
+pepper-crm = { path = "../pepper-crm" }
 rmcp = { workspace = true }
 tokio = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 anyhow = { workspace = true }
-chrono = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-# Digest-specific
-tera = { workspace = true }

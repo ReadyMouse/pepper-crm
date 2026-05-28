@@ -74,6 +74,23 @@
             {% if travel_refresh_error %}
             <p class="travel-flash travel-flash-err">Refresh failed — check server logs for details.</p>
             {% endif %}
+            {% if geo_just_finished %}
+            <p class="travel-flash travel-flash-ok">GEO pass complete — wrote coordinates for {{ geo_geocoded_count }} contact(s){% if geo_failed_count > 0 %} ({{ geo_failed_count }} failed){% endif %}.</p>
+            {% endif %}
+            {% if geo_refresh_error %}
+            <p class="travel-flash travel-flash-err">GEO pass failed — check server logs for details.</p>
+            {% endif %}
+
+            <p class="travel-geo-meta">
+                Contact GEO: {{ geo_with_coords }}/{{ geo_with_address }} addresses tagged
+                {% if geo_with_address > 0 and geo_with_coords * 100 / geo_with_address < 25 %}
+                — run geocode after a fresh phone export
+                {% endif %}
+            </p>
+
+            <form method="post" action="/contacts/geocode" class="travel-geo-form">
+                <button type="submit" class="btn-geo">Geocode contacts (write GEO to vCards)</button>
+            </form>
 
             <form method="post" action="/travel/refresh" class="travel-refresh-form">
                 <label class="travel-location-label" for="search_location">
@@ -125,14 +142,13 @@
                         </div>
                         <form method="post" action="/travel/snooze" class="travel-snooze-form">
                             <input type="hidden" name="uid" value="{{ match.uid }}">
-                            <label class="travel-snooze-label" for="snooze-{{ match.uid }}">Reconnect</label>
-                            <select id="snooze-{{ match.uid }}" name="reconnect" class="travel-snooze-select" required>
+                            <select id="snooze-{{ match.uid }}" name="reconnect" class="travel-snooze-select" required aria-label="Snooze interval">
                                 <option value="" disabled selected>Reconnect…</option>
                                 {% for opt in reconnect_snooze_options %}
                                 <option value="{{ opt.value }}">{{ opt.label }}</option>
                                 {% endfor %}
                             </select>
-                            <button type="submit" class="btn-snooze">Set</button>
+                            <button type="submit" class="btn-snooze">Snooze</button>
                         </form>
                     </li>
                     {% endfor %}
@@ -153,16 +169,28 @@
             <div class="section-header">
                 <h2>Pending Tasks</h2>
             </div>
-            <p class="section-desc">Open <code>TODO:</code> items from your contact cards (synced from VCF → PostgreSQL).</p>
+            <p class="section-desc">Open <code>TODO:</code> items from your contact cards (read directly from VCF).</p>
+            {% if task_completed %}
+            <p class="travel-flash travel-flash-ok">Task removed from contact card.</p>
+            {% endif %}
             {% if task_count > 0 %}
+            <div id="pending-tasks-list">
             {% for task in tasks %}
-            <div class="list-item">
-                <div class="list-item-name">{{ task.contact_name }}</div>
-                <div class="list-item-detail">TODO: {{ task.description }}</div>
+            <div class="list-item list-item-row" data-task-row data-counter="task">
+                <div class="travel-match-main">
+                    <div class="list-item-name">{{ task.contact_name }}</div>
+                    <div class="list-item-detail">TODO: {{ task.description }}</div>
+                </div>
+                <form method="post" action="/tasks/complete" class="task-complete-form">
+                    <input type="hidden" name="uid" value="{{ task.uid }}">
+                    <input type="hidden" name="description" value="{{ task.description }}">
+                    <button type="submit" class="btn-snooze">Done</button>
+                </form>
             </div>
             {% endfor %}
+            </div>
             {% else %}
-            <div class="empty-state">
+            <div id="pending-tasks-empty" class="empty-state">
                 <p>No pending tasks.</p>
             </div>
             {% endif %}
@@ -188,14 +216,13 @@
                 </div>
                 <form method="post" action="/travel/snooze" class="travel-snooze-form">
                     <input type="hidden" name="uid" value="{{ reconnect.uid }}">
-                    <label class="travel-snooze-label" for="snooze-reconnect-{{ reconnect.uid }}">Snooze</label>
-                    <select id="snooze-reconnect-{{ reconnect.uid }}" name="reconnect" class="travel-snooze-select" required>
+                    <select id="snooze-reconnect-{{ reconnect.uid }}" name="reconnect" class="travel-snooze-select" required aria-label="Snooze interval">
                         <option value="" disabled selected>Reconnect…</option>
                         {% for opt in reconnect_snooze_options %}
                         <option value="{{ opt.value }}">{{ opt.label }}</option>
                         {% endfor %}
                     </select>
-                    <button type="submit" class="btn-snooze">Set</button>
+                    <button type="submit" class="btn-snooze">Snooze</button>
                 </form>
             </div>
             {% endfor %}
@@ -231,9 +258,9 @@
                 {% endif %}
             </p>
             {% if random_pick_count > 0 %}
-            <ul class="random-pick-list">
+            <ul class="random-pick-list" id="random-pick-list">
                 {% for pick in random_picks %}
-                <li class="random-pick-card">
+                <li class="random-pick-card" data-snooze-row data-counter="random">
                     <div class="random-pick-name">{{ pick.full_name }}</div>
                     <div class="random-pick-meta">
                         {% if pick.org != "" %}
@@ -266,16 +293,15 @@
                         <div><span class="random-pick-label">Phone</span> {{ pick.phone }}</div>
                         {% endif %}
                     </div>
-                    <form method="post" action="/random/category" class="random-pick-category-form">
+                    <form method="post" action="/random/category" class="random-pick-category-form travel-snooze-form">
                         <input type="hidden" name="uid" value="{{ pick.uid }}">
-                        <label class="travel-snooze-label" for="random-reconnect-{{ pick.uid }}">Reconnect</label>
-                        <select id="random-reconnect-{{ pick.uid }}" name="reconnect" class="travel-snooze-select" required>
+                        <select id="random-reconnect-{{ pick.uid }}" name="reconnect" class="travel-snooze-select" required aria-label="Snooze interval">
                             <option value="" disabled selected>Reconnect…</option>
                             {% for opt in random_pick_category_options %}
                             <option value="{{ opt.value }}">{{ opt.label }}</option>
                             {% endfor %}
                         </select>
-                        <button type="submit" class="btn-snooze">Set</button>
+                        <button type="submit" class="btn-snooze">Snooze</button>
                     </form>
                 </li>
                 {% endfor %}
