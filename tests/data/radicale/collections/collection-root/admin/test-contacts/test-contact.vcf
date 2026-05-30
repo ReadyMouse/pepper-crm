@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:test-contact
+FN:Jane Doe
+N:Doe;Jane;;;
+END:VCARD

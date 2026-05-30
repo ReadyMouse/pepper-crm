@@ -59,4 +59,6 @@ Desktop.ini
 documentation_agent.md
 documentation_subagent.md
 
-
+.vagrant
+**/.Radicale.lock
+**/.Radicale.cache
