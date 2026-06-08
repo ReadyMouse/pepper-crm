@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# Cross-compile Pepper binaries for Raspberry Pi 5 (aarch64 Linux) from an Apple Silicon Mac.
+# # Cross-Compile Linux ARM64 Binaries
 #
-# Prerequisites (Homebrew):
-#   brew install messense/macos-cross-toolchains/aarch64-unknown-linux-gnu
-#   rustup target add aarch64-unknown-linux-gnu
+#   Builds `pepper` and `pepper-web` for Raspberry Pi 5 (aarch64 Linux) from an Apple Silicon Mac.
 #
-# Output: target/aarch64-unknown-linux-gnu/release/{pepper,pepper-web,...}
+# INPUT:
+#   - Homebrew cross toolchain and `rustup target add aarch64-unknown-linux-gnu`.
+#
+# OUTPUT:
+#   - `target/aarch64-unknown-linux-gnu/release/{pepper,pepper-web,...}`
+#
+# NOTES:
+#   - Prerequisites: `brew install messense/macos-cross-toolchains/aarch64-unknown-linux-gnu`
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."

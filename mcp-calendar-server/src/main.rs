@@ -12,65 +12,101 @@
 //!
 //! NOTES:
 //!   - Server name: `mcp-calendar-server`
-//!   - Uses pepper-crm `fetch_ics` and `trips_for_next_week`
-//!   - Not spawned by the pepper orchestrator (travel uses pepper-crm / mcp-travel-server)
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
-use anyhow::{Context, Result};
 use chrono::Local;
-use pepper_crm::{fetch_ics, trips_for_next_week};
-use rmcp::*;
+use pepper_crm::{fetch_ics, load_dotenv, trips_for_next_week};
+use rmcp::{
+    ServerHandler, ServiceExt,
+    handler::server::{router::tool::ToolRouter, wrapper::{Json, Parameters}},
+    model::{ServerCapabilities, ServerInfo},
+    tool, tool_handler, tool_router,
+    transport::stdio,
+};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 struct GetUpcomingTravelArgs {
     as_of: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 struct TravelTripOut {
     title: String,
     start: String,
     end: String,
 }
 
-async fn handle_get_upcoming_travel(args: GetUpcomingTravelArgs) -> Result<Vec<TravelTripOut>> {
-    let as_of = if let Some(d) = args.as_of {
-        chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d")?
-    } else {
-        Local::now().date_naive()
-    };
+#[derive(Clone)]
+struct CalendarServer {
+    tool_router: ToolRouter<Self>,
+}
 
-    let url = std::env::var("GOOGLE_CALENDAR_ICS_URL")
-        .context("GOOGLE_CALENDAR_ICS_URL must be set")?;
-    info!("Fetching calendar ICS for travel (as_of={})", as_of);
-    let ics = fetch_ics(&url).await?;
-    let trips = trips_for_next_week(&ics, as_of)?;
+impl CalendarServer {
+    fn new() -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+        }
+    }
+}
 
-    Ok(trips
-        .into_iter()
-        .map(|t| TravelTripOut {
-            title: t.title,
-            start: t.start.to_string(),
-            end: t.end.to_string(),
-        })
-        .collect())
+#[tool_router]
+impl CalendarServer {
+    #[tool(
+        description = "Fetch Google Calendar ICS and return travel trips for next week (SUMMARY = destination)"
+    )]
+    async fn get_upcoming_travel(
+        &self,
+        Parameters(args): Parameters<GetUpcomingTravelArgs>,
+    ) -> Result<Json<Vec<TravelTripOut>>, String> {
+        let as_of = if let Some(d) = args.as_of {
+            chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").map_err(|e| e.to_string())?
+        } else {
+            Local::now().date_naive()
+        };
+
+        let url = std::env::var("GOOGLE_CALENDAR_ICS_URL")
+            .map_err(|_| "GOOGLE_CALENDAR_ICS_URL must be set".to_string())?;
+        info!("Fetching calendar ICS for travel (as_of={})", as_of);
+        let ics = fetch_ics(&url).await.map_err(|e| e.to_string())?;
+        let trips = trips_for_next_week(&ics, as_of).map_err(|e| e.to_string())?;
+
+        Ok(Json(
+            trips
+                .into_iter()
+                .map(|t| TravelTripOut {
+                    title: t.title,
+                    start: t.start.to_string(),
+                    end: t.end.to_string(),
+                })
+                .collect(),
+        ))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for CalendarServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            instructions: Some(
+                "Fetch upcoming travel trips from Google Calendar ICS for Pepper CRM.".into(),
+            ),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            ..Default::default()
+        }
+    }
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    dotenvy::dotenv().ok();
+    load_dotenv()?;
+
     info!("Starting mcp-calendar-server");
-
-    let server = Server::new("mcp-calendar-server").with_tool(
-        "get_upcoming_travel",
-        "Fetch Google Calendar ICS and return travel trips for next week (SUMMARY = destination)",
-        |args: GetUpcomingTravelArgs| async move { handle_get_upcoming_travel(args).await },
-    );
-
-    server.run_stdio().await?;
+    let service = CalendarServer::new().serve(stdio()).await?;
+    service.waiting().await?;
     Ok(())
 }

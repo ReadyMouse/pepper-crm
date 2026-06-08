@@ -1,0 +1,20 @@
+# # Example Crontab — Weekly Digest
+#
+#   Sample crontab entry for Pepper's calendar-aware Monday digest on a Raspberry Pi.
+#
+# INPUT:
+#   - None (reference file; copy or use `install-weekly-cron.sh` instead).
+#
+# OUTPUT:
+#   - Hourly cron line template for `run-weekly-digest.sh`.
+#
+# NOTES:
+#   - Prefer `./scripts/install-weekly-cron.sh` for idempotent install.
+#   - Debug: `cd ~/pepper-crm && ./pepper --schedule-status`
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+0 * * * * PEPPER_HOME=/home/pi/pepper-crm /home/pi/pepper-crm/scripts/run-weekly-digest.sh

@@ -4,7 +4,7 @@
 //!
 //! INPUT: CONTACTS_DIR, CACHE_DIR, GOOGLE_CALENDAR_ICS_URL (optional); VCF files.
 //! OUTPUT: Routes `/`, `/preview`, `/travel/refresh`, `/travel/snooze`, `/tasks/complete`, `/random/shuffle`; static assets.
-//! NOTES: Contacts and tasks live in VCF only (no PostgreSQL).
+//! NOTES: Contacts and tasks live in VCF.
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
@@ -19,10 +19,14 @@ use axum::{
 use serde::Deserialize;
 use chrono::Local;
 use pepper_crm::{
-    build_travel_week_snapshot, complete_task, ensure_contacts_geocoded_in_dir,
-    fetch_due_items, fetch_ics, find_contact_by_uid,
-    trips_for_next_week, upcoming_birthdays_from_contacts, BIRTHDAY_WINDOW_DAYS,
-    km_to_miles, load_current_snapshot, miles_to_km, parse_contacts, contacts_use_carddav,
+    build_travel_week_snapshot, complete_task, data_enrichment_picks,
+    ensure_contacts_geocoded_in_dir, fetch_due_items, fetch_ics, find_contact_by_uid,
+    dismiss_enrichment_pick, enrichment_issue, geocode_contact_after_location,
+    set_contact_location, trips_for_next_week, GeocodeContactOutcome,
+    upcoming_birthdays_from_contacts,
+    BIRTHDAY_WINDOW_DAYS, DATA_ENRICHMENT_COUNT,
+    km_to_miles, load_current_snapshot, miles_to_km, parse_contacts, contacts_read_only,
+    contacts_use_carddav,
     resolve_random_picks, shuffle_and_save, remove_contact_from_current_snapshot,
     dismiss_random_pick, set_random_pick_category, build_digest_input_from_due, render_digest_email,
     load_dotenv, DueReconnectInfo, MatchReason, RandomPickInfo, RandomPickWeek,
@@ -33,6 +37,7 @@ use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
+    time::{Duration, Instant},
 };
 use tera::{Context as TeraContext, Tera};
 use tower_http::{services::ServeDir, trace::TraceLayer};
@@ -47,6 +52,7 @@ struct AppState {
     contacts_dir: PathBuf,
     /// Parsed VCF contacts (reloaded after edits). Avoids re-parsing on each request.
     contacts: Arc<RwLock<Arc<Vec<pepper_crm::Contact>>>>,
+    contacts_loaded_at: Arc<RwLock<Option<Instant>>>,
 }
 
 #[derive(Serialize)]
@@ -102,6 +108,18 @@ struct BirthdayView {
     age_label: String,
 }
 
+#[derive(Serialize)]
+struct DataEnrichmentView {
+    uid: String,
+    contact_name: String,
+    org: String,
+    street: String,
+    city: String,
+    state: String,
+    issue_label: String,
+    location_hint: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct DashboardQuery {
     refreshed: Option<String>,
@@ -114,6 +132,9 @@ struct DashboardQuery {
     geo_error: Option<String>,
     geo_count: Option<String>,
     geo_failed: Option<String>,
+    enrichment_location_saved: Option<String>,
+    enrichment_geo_ok: Option<String>,
+    enrichment_geo_failed: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +154,14 @@ struct TravelSnoozeForm {
 struct TaskCompleteForm {
     uid: String,
     description: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContactLocationForm {
+    uid: String,
+    street: String,
+    city: String,
+    state: String,
 }
 
 #[derive(Serialize)]
@@ -177,6 +206,20 @@ fn task_views(tasks: Vec<pepper_crm::PendingTaskInfo>) -> Vec<TaskView> {
             description: t.description,
         })
         .collect()
+}
+
+fn format_enrichment_location_hint(
+    street: Option<&str>,
+    city: Option<&str>,
+    state: Option<&str>,
+) -> String {
+    let street = street.filter(|s| !s.is_empty());
+    let city_state = format_location(city, state);
+    match (street, city_state.is_empty()) {
+        (Some(st), false) => format!("{st}, {city_state}"),
+        (Some(st), true) => st.to_string(),
+        (None, _) => city_state,
+    }
 }
 
 fn format_location(city: Option<&str>, state: Option<&str>) -> String {
@@ -263,9 +306,94 @@ fn fetch_random_picks(contacts: &Arc<Vec<pepper_crm::Contact>>, cache_root: &Pat
 
 async fn reload_contacts_cache(state: &AppState) -> Result<()> {
     let contacts = parse_contacts_blocking(state.contacts_dir.clone()).await?;
-    info!("Reloaded {} contacts from {}", contacts.len(), if contacts_use_carddav() { "CardDAV" } else { "VCF" });
+    let source = if contacts_use_carddav() {
+        "CardDAV".to_string()
+    } else {
+        state.contacts_dir.display().to_string()
+    };
+    info!("Reloaded {} contacts from {}", contacts.len(), source);
     *state.contacts.write().expect("contacts lock poisoned") = contacts;
+    *state
+        .contacts_loaded_at
+        .write()
+        .expect("contacts_loaded_at lock poisoned") = Some(Instant::now());
     Ok(())
+}
+
+fn contacts_reload_secs() -> u64 {
+    std::env::var("CONTACTS_RELOAD_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(if contacts_read_only() { 120 } else { 0 })
+}
+
+async fn reload_contacts_if_stale(state: &AppState) {
+    let reload_secs = contacts_reload_secs();
+    if reload_secs == 0 {
+        return;
+    }
+
+    let should_reload = {
+        let guard = state
+            .contacts_loaded_at
+            .read()
+            .expect("contacts_loaded_at lock poisoned");
+        match *guard {
+            None => true,
+            Some(loaded_at) => loaded_at.elapsed() >= Duration::from_secs(reload_secs),
+        }
+    };
+
+    if should_reload {
+        if let Err(e) = reload_contacts_cache(state).await {
+            tracing::warn!("Periodic contacts reload failed: {}", e);
+        }
+    }
+}
+
+fn ensure_contacts_writable() -> Result<(), String> {
+    if contacts_read_only() {
+        return Err(
+            "Contacts are read-only (phone sync folder). Edit on your phone, or disable CONTACTS_READ_ONLY."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn data_enrichment_views(week: pepper_crm::DataEnrichmentWeek) -> Vec<DataEnrichmentView> {
+    week.picks
+        .into_iter()
+        .map(|p| {
+            let issue_label = match p.issue {
+                pepper_crm::DataEnrichmentIssue::MissingAddress => {
+                    "No address on card".to_string()
+                }
+                pepper_crm::DataEnrichmentIssue::IllFormedAddress => {
+                    "Address on card could not be parsed — fix city/state (and street if needed)"
+                        .to_string()
+                }
+                pepper_crm::DataEnrichmentIssue::GeocodeFailed => {
+                    "Geocoding failed or GEO is invalid — try a clearer address".to_string()
+                }
+            };
+            let location_hint = format_enrichment_location_hint(
+                p.street.as_deref(),
+                p.city.as_deref(),
+                p.state.as_deref(),
+            );
+            DataEnrichmentView {
+                uid: p.uid,
+                contact_name: p.full_name,
+                org: p.org.unwrap_or_default(),
+                street: p.street.unwrap_or_default(),
+                city: p.city.unwrap_or_default(),
+                state: p.state.unwrap_or_default(),
+                issue_label,
+                location_hint,
+            }
+        })
+        .collect()
 }
 
 fn birthday_views(
@@ -362,7 +490,7 @@ fn snapshot_to_views(snapshot: &TravelWeekSnapshot) -> (Vec<TravelTripView>, usi
 }
 
 async fn load_contacts_from_vcf(contacts_dir: &PathBuf) -> Result<Arc<Vec<pepper_crm::Contact>>> {
-    if !contacts_dir.exists() {
+    if !contacts_use_carddav() && !contacts_dir.exists() {
         info!(
             "Contacts directory {} not found, starting with empty contact list",
             contacts_dir.display()
@@ -482,6 +610,7 @@ async fn index(
 }
 
 async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<String> {
+    reload_contacts_if_stale(state).await;
     let as_of = Local::now().date_naive();
     let snapshot = load_current_snapshot(&state.cache_root, as_of)?;
     let contacts = contacts_snapshot(&state);
@@ -491,6 +620,17 @@ async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<St
         as_of,
         BIRTHDAY_WINDOW_DAYS,
     ));
+    let enrichment_week = data_enrichment_picks(
+        &contacts,
+        &state.cache_root,
+        as_of,
+        DATA_ENRICHMENT_COUNT,
+    )?;
+    let enrichment_picks = data_enrichment_views(enrichment_week.clone());
+    let enrichment_pick_count = enrichment_picks.len();
+    let enrichment_eligible_count = enrichment_week.eligible_count;
+    let enrichment_fewer_than_target =
+        enrichment_pick_count < DATA_ENRICHMENT_COUNT && enrichment_eligible_count > 0;
     let random_week = fetch_random_picks(&contacts, &state.cache_root)?;
     let random_picks = random_pick_views(random_week.picks);
     let random_pick_count = random_picks.len();
@@ -501,6 +641,10 @@ async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<St
     let task_completed = query.task_completed.as_deref() == Some("1");
     let random_just_shuffled = query.random_shuffled.as_deref() == Some("1");
     let random_category_saved = query.random_category_saved.as_deref() == Some("1");
+    let enrichment_location_saved =
+        query.enrichment_location_saved.as_deref() == Some("1");
+    let enrichment_geo_ok = query.enrichment_geo_ok.as_deref() == Some("1");
+    let enrichment_geo_failed = query.enrichment_geo_failed.as_deref() == Some("1");
 
     let mut context = TeraContext::new();
     context.insert("nav_active", "dashboard");
@@ -526,6 +670,15 @@ async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<St
     context.insert("birthdays", &birthdays);
     context.insert("birthday_count", &birthdays.len());
     context.insert("birthday_window_days", &BIRTHDAY_WINDOW_DAYS);
+    context.insert("enrichment_picks", &enrichment_picks);
+    context.insert("enrichment_pick_count", &enrichment_pick_count);
+    context.insert("enrichment_eligible_count", &enrichment_eligible_count);
+    context.insert("enrichment_pick_target", &DATA_ENRICHMENT_COUNT);
+    context.insert("enrichment_fewer_than_target", &enrichment_fewer_than_target);
+    context.insert("enrichment_location_saved", &enrichment_location_saved);
+    context.insert("enrichment_geo_ok", &enrichment_geo_ok);
+    context.insert("enrichment_geo_failed", &enrichment_geo_failed);
+    context.insert("contacts_read_only", &contacts_read_only());
     let travel_search_location =
         default_travel_search_location(as_of, snapshot.as_ref()).await;
     context.insert("travel_search_location", &travel_search_location);
@@ -565,17 +718,23 @@ async fn render_dashboard(state: &AppState, query: &DashboardQuery) -> Result<St
     Ok(state.tera.render("dashboard.html", &context)?)
 }
 
-async fn reload_contact_after_vcf_edit(state: &AppState, uid: &str) {
-    let as_of = Local::now().date_naive();
-    if let Err(e) = remove_contact_from_current_snapshot(&state.cache_root, as_of, uid) {
-        tracing::warn!("Could not update travel snapshot after VCF edit: {}", e);
-    }
+async fn reload_contacts_after_edit(state: &AppState) {
     if let Err(e) = reload_contacts_cache(state).await {
         tracing::warn!("VCF reload after edit failed: {}", e);
     }
 }
 
+/// After reconnect/snooze edits: drop from cached travel list and reload contacts.
+async fn reload_contact_after_reconnect_edit(state: &AppState, uid: &str) {
+    let as_of = Local::now().date_naive();
+    if let Err(e) = remove_contact_from_current_snapshot(&state.cache_root, as_of, uid) {
+        tracing::warn!("Could not update travel snapshot after VCF edit: {}", e);
+    }
+    reload_contacts_after_edit(state).await;
+}
+
 async fn apply_random_pick_category(state: &AppState, form: &TravelSnoozeForm) -> Result<(), String> {
+    ensure_contacts_writable()?;
     let choice = form.reconnect.trim();
     if choice.is_empty() {
         return Err("Choose a reconnect interval or Do Not Engage.".into());
@@ -593,7 +752,7 @@ async fn apply_random_pick_category(state: &AppState, form: &TravelSnoozeForm) -
     dismiss_random_pick(&state.cache_root, as_of, &form.uid)
         .map_err(|e| format!("Failed to dismiss random pick: {e}"))?;
 
-    reload_contact_after_vcf_edit(state, &form.uid).await;
+    reload_contact_after_reconnect_edit(state, &form.uid).await;
 
     Ok(())
 }
@@ -639,6 +798,7 @@ async fn random_category(
 }
 
 async fn apply_task_complete(state: &AppState, form: &TaskCompleteForm) -> Result<(), String> {
+    ensure_contacts_writable()?;
     let description = form.description.trim();
     if description.is_empty() {
         return Err("Missing task description.".into());
@@ -648,9 +808,77 @@ async fn apply_task_complete(state: &AppState, form: &TaskCompleteForm) -> Resul
 
     complete_task(&contact, description).map_err(|e| format!("Failed to update contact: {e}"))?;
 
-    reload_contact_after_vcf_edit(state, &form.uid).await;
+    reload_contacts_after_edit(state).await;
 
     Ok(())
+}
+
+async fn apply_contact_location(
+    state: &AppState,
+    form: &ContactLocationForm,
+) -> Result<GeocodeContactOutcome, String> {
+    ensure_contacts_writable()?;
+    let city = form.city.trim();
+    if city.is_empty() {
+        return Err("City is required.".into());
+    }
+    let state_str = form.state.trim();
+    let state_opt = (!state_str.is_empty()).then_some(state_str);
+    let street_str = form.street.trim();
+    let street_opt = (!street_str.is_empty()).then_some(street_str);
+
+    let contact = contact_by_uid(state, &form.uid)?;
+    set_contact_location(&contact, city, state_opt, street_opt)
+        .map_err(|e| format!("Failed to update contact: {e}"))?;
+
+    let mut updated = find_contact_by_uid(&state.contacts_dir, &form.uid)
+        .map_err(|e| format!("Failed to reload contact: {e}"))?;
+    let write_back = geo_write_to_vcf_enabled();
+    let outcome = geocode_contact_after_location(&mut updated, &state.cache_root, write_back)
+        .await
+        .map_err(|e| format!("Geocode error: {e}"))?;
+
+    reload_contacts_after_edit(state).await;
+
+    let as_of = Local::now().date_naive();
+    let contacts = contacts_snapshot(state);
+    if let Some(c) = contacts.iter().find(|c| c.uid == form.uid) {
+        if enrichment_issue(c, &state.cache_root)
+            .map_err(|e| format!("Failed to check enrichment status: {e}"))?
+            .is_none()
+        {
+            dismiss_enrichment_pick(&state.cache_root, as_of, &form.uid)
+                .map_err(|e| format!("Failed to update enrichment queue: {e}"))?;
+        }
+    }
+
+    Ok(outcome)
+}
+
+fn enrichment_location_redirect(outcome: GeocodeContactOutcome) -> &'static str {
+    match outcome {
+        GeocodeContactOutcome::Geocoded | GeocodeContactOutcome::AlreadyOk => {
+            "/?enrichment_location_saved=1&enrichment_geo_ok=1"
+        }
+        GeocodeContactOutcome::Failed => {
+            "/?enrichment_location_saved=1&enrichment_geo_failed=1"
+        }
+        GeocodeContactOutcome::NoQueries => "/?enrichment_location_saved=1&enrichment_geo_failed=1",
+    }
+}
+
+async fn contact_location(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<ContactLocationForm>,
+) -> Response {
+    let uid = form.uid.clone();
+    match apply_contact_location(&state, &form).await {
+        Ok(outcome) => Redirect::to(enrichment_location_redirect(outcome)).into_response(),
+        Err(message) => {
+            tracing::error!("Contact location update failed for {}: {}", uid, message);
+            Redirect::to("/?travel_error=1").into_response()
+        }
+    }
 }
 
 async fn task_complete(
@@ -697,6 +925,7 @@ async fn task_complete(
 }
 
 async fn apply_travel_snooze(state: &AppState, form: &TravelSnoozeForm) -> Result<(), String> {
+    ensure_contacts_writable()?;
     let reconnect = form.reconnect.trim();
     if reconnect.is_empty() {
         return Err("Choose a reconnect interval or Do Not Engage.".into());
@@ -711,7 +940,7 @@ async fn apply_travel_snooze(state: &AppState, form: &TravelSnoozeForm) -> Resul
     set_random_pick_category(&contact, reconnect, as_of)
         .map_err(|e| format!("Failed to update contact: {e}"))?;
 
-    reload_contact_after_vcf_edit(state, &form.uid).await;
+    reload_contact_after_reconnect_edit(state, &form.uid).await;
 
     Ok(())
 }
@@ -793,6 +1022,9 @@ async fn random_shuffle(State(state): State<Arc<AppState>>) -> Response {
 }
 
 fn geo_write_to_vcf_enabled() -> bool {
+    if contacts_read_only() {
+        return false;
+    }
     std::env::var("GEO_WRITE_TO_VCF")
         .map(|s| {
             let lower = s.to_lowercase();
@@ -849,7 +1081,8 @@ async fn travel_refresh(
     config.contacts_dir = state.contacts_dir.clone();
     config.cache_root = state.cache_root.clone();
     config.force = true;
-    config.ensure_contact_geo = false;
+    config.ensure_contact_geo = contacts_read_only() || config.ensure_contact_geo;
+    config.write_geo_to_vcf = geo_write_to_vcf_enabled();
     config.metro_radius_km = miles_to_km(metro_radius_mi as f64);
     config.search_location = if search_location.is_empty() {
         None
@@ -860,7 +1093,9 @@ async fn travel_refresh(
     info!(
         metro_radius_mi,
         search_location = config.search_location.as_deref().unwrap_or("(all calendar trips)"),
-        "Starting travel match build (calendar + cached contact GEO only; full geocode runs on weekly scan)..."
+        ensure_contact_geo = config.ensure_contact_geo,
+        write_geo_to_vcf = config.write_geo_to_vcf,
+        "Starting travel match build (calendar + contact GEO; geocodes missing addresses when coverage is low)..."
     );
 
     match build_travel_week_snapshot(&config).await {
@@ -934,6 +1169,12 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from(".cache"));
 
     let contacts = load_contacts_from_vcf(&contacts_dir).await?;
+    if contacts_read_only() {
+        info!(
+            "Contacts are read-only; reloading every {}s from phone sync folder",
+            contacts_reload_secs()
+        );
+    }
 
     let mut tera = Tera::new("pepper-web/templates/**/*.html")?;
     tera.autoescape_on(vec!["html"]);
@@ -942,8 +1183,9 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState {
         tera,
         cache_root,
-        contacts_dir,
+        contacts_dir: contacts_dir.clone(),
         contacts: Arc::new(RwLock::new(contacts)),
+        contacts_loaded_at: Arc::new(RwLock::new(Some(Instant::now()))),
     });
 
     let app = Router::new()
@@ -952,6 +1194,7 @@ async fn main() -> Result<()> {
         .route("/contacts/geocode", post(contacts_geocode))
         .route("/travel/snooze", post(travel_snooze))
         .route("/tasks/complete", post(task_complete))
+        .route("/contacts/location", post(contact_location))
         .route("/random/shuffle", post(random_shuffle))
         .route("/random/category", post(random_category))
         .route("/preview", get(digest_preview))

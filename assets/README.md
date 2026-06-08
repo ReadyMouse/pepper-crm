@@ -19,6 +19,8 @@ Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 Shared media for Pepper — not tied to a single binary. Web, email, and future clients all reference files here.
 
+See also [`README_assets.md`](README_assets.md) for open-source notes and usage by surface.
+
 ## Layout
 
 ```

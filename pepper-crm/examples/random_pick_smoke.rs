@@ -1,4 +1,17 @@
-//! Smoke test: resolve random picks against CONTACTS_DIR (same path as dashboard).
+//! # Random Pick Smoke Example
+//!
+//!   Resolves weekly random contact picks against `CONTACTS_DIR` (same path as the dashboard).
+//!
+//! INPUT:
+//!   - `CONTACTS_DIR`, `CACHE_DIR`, current local date.
+//!
+//! OUTPUT:
+//!   - stdout listing parsed contact count and selected random picks for the week.
+//!
+//! NOTES:
+//!   - Run: `cargo run -p pepper-crm --example random_pick_smoke`
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use anyhow::Result;
 use chrono::Local;

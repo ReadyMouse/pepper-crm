@@ -17,42 +17,43 @@
 use crate::birthdays::{upcoming_birthdays_from_contacts, BIRTHDAY_WINDOW_DAYS};
 use crate::models::{
     Contact, DueReconnectInfo, MatchReason, PendingTaskInfo, RandomPickInfo, RandomPickWeek,
-    TaskRow, TravelWeekSnapshot,
+    TravelWeekSnapshot,
 };
 use crate::random_pick::resolve_random_picks;
 use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate};
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 use std::path::Path;
 use tera::{Context as TeraContext, Tera};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DigestTask {
     pub contact_name: String,
     pub description: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DigestReconnect {
     pub contact_name: String,
     pub due_date: String,
     pub tag: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DigestTravelMatch {
     pub full_name: String,
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DigestTravelTrip {
     pub title: String,
     pub date_range: String,
     pub matches: Vec<DigestTravelMatch>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DigestBirthday {
     pub contact_name: String,
     pub date_label: String,
@@ -60,7 +61,7 @@ pub struct DigestBirthday {
     pub age_label: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DigestRandomPick {
     pub full_name: String,
     pub org: String,
@@ -70,7 +71,7 @@ pub struct DigestRandomPick {
 }
 
 /// Full payload for `templates/digest.html`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DigestInput {
     pub tasks: Vec<DigestTask>,
     pub reconnects: Vec<DigestReconnect>,
@@ -83,7 +84,7 @@ pub struct DigestInput {
     pub random_week_label: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct DigestOutput {
     pub html: String,
     pub subject: String,
@@ -113,16 +114,6 @@ pub fn tasks_from_pending(tasks: &[PendingTaskInfo]) -> Vec<DigestTask> {
         .map(|t| DigestTask {
             contact_name: t.full_name.clone(),
             description: t.description.clone(),
-        })
-        .collect()
-}
-
-pub fn tasks_from_rows(tasks: &[TaskRow]) -> Vec<DigestTask> {
-    tasks
-        .iter()
-        .map(|t| DigestTask {
-            contact_name: t.full_name.clone(),
-            description: t.body.clone(),
         })
         .collect()
 }

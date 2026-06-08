@@ -7,7 +7,7 @@
 ;   - Parsed as raw ICS string (include_str! in tests).
 ;
 ; OUTPUT:
-;   - One VEVENT: SUMMARY "Chicago, IL", DTSTART 2026-05-26, DTEND 2026-05-30 (exclusive).
+;   - One VEVENT: SUMMARY "Chicago, IL", DTSTART 2026-05-25 (Mon), DTEND 2026-05-30 (exclusive).
 ;
 ; NOTES:
 ;   - Comment lines are ignored by the Pepper ICS parser (skipped outside VEVENT blocks).
@@ -20,7 +20,7 @@ PRODID:-//Pepper CRM//Travel Test//EN
 BEGIN:VEVENT
 UID:travel-test-chicago@pepper
 SUMMARY:Chicago, IL
-DTSTART;VALUE=DATE:20260526
+DTSTART;VALUE=DATE:20260525
 DTEND;VALUE=DATE:20260530
 END:VEVENT
 END:VCALENDAR

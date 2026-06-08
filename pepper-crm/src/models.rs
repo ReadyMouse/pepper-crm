@@ -1,24 +1,23 @@
 //! # Domain Models
 //!
-//!   Shared data types for parsed vCard contacts, PostgreSQL rows, digest payloads,
-//!   and weekly travel snapshots.
+//!   Shared data types for parsed vCard contacts, digest payloads, and weekly travel snapshots.
 //!
 //! INPUT:
-//!   - VCF-derived fields, SQL query rows, and serde JSON for travel cache files.
+//!   - VCF-derived fields and serde JSON for travel cache files.
 //!
 //! OUTPUT:
-//!   - `Contact`, `Task`, `Reconnect`, row types (`TaskRow`, `ReconnectRow`), and travel structs.
+//!   - `Contact`, pending task/reconnect info, and travel structs.
 //!
 //! NOTES:
-//!   - `Contact` is the in-memory source of truth before DB upsert; travel types serialize to cache JSON.
+//!   - `Contact` is the in-memory source of truth; task and reconnect state lives in vCard fields.
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use crate::geo::GeoPoint;
 use chrono::{NaiveDate, DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 /// Represents a parsed contact from a VCF file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +29,8 @@ pub struct Contact {
     /// All `URL:` fields from the vCard (LinkedIn, personal site, etc.).
     pub urls: Vec<String>,
     pub org: Option<String>,
+    /// Parsed from ADR street component (when city is in locality slot).
+    pub street: Option<String>,
     pub city: Option<String>,       // parsed from ADR field
     pub state: Option<String>,      // parsed from ADR field
     pub country: Option<String>,
@@ -60,6 +61,34 @@ pub struct Birthday {
     pub year: Option<i32>,
 }
 
+/// Why a contact needs dashboard data enrichment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DataEnrichmentIssue {
+    MissingAddress,
+    IllFormedAddress,
+    GeocodeFailed,
+}
+
+/// One contact surfaced for address / GEO enrichment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataEnrichmentInfo {
+    pub uid: String,
+    pub full_name: String,
+    pub org: Option<String>,
+    pub street: Option<String>,
+    pub city: Option<String>,
+    pub state: Option<String>,
+    pub issue: DataEnrichmentIssue,
+}
+
+/// Weekly data-enrichment spotlight (up to three picks).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataEnrichmentWeek {
+    pub picks: Vec<DataEnrichmentInfo>,
+    pub eligible_count: usize,
+}
+
 /// One contact with a birthday in the dashboard window.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpcomingBirthdayInfo {
@@ -68,86 +97,6 @@ pub struct UpcomingBirthdayInfo {
     pub occurrence: NaiveDate,
     pub turning_age: Option<u32>,
     pub days_until: u32,
-}
-
-/// Task data structure for database operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Task {
-    pub id: Uuid,
-    pub contact_id: Uuid,
-    pub body: String,
-    pub status: TaskStatus,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text")]
-pub enum TaskStatus {
-    #[sqlx(rename = "pending")]
-    Pending,
-    #[sqlx(rename = "done")]
-    Done,
-    #[sqlx(rename = "snoozed")]
-    Snoozed,
-}
-
-impl std::fmt::Display for TaskStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TaskStatus::Pending => write!(f, "pending"),
-            TaskStatus::Done => write!(f, "done"),
-            TaskStatus::Snoozed => write!(f, "snoozed"),
-        }
-    }
-}
-
-/// Reconnect reminder data structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Reconnect {
-    pub id: Uuid,
-    pub contact_id: Uuid,
-    pub due_date: NaiveDate,
-    pub status: ReconnectStatus,
-    pub original_tag: String,
-    pub created_at: DateTime<Utc>,
-    pub sent_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text")]
-pub enum ReconnectStatus {
-    #[sqlx(rename = "pending")]
-    Pending,
-    #[sqlx(rename = "sent")]
-    Sent,
-    #[sqlx(rename = "dismissed")]
-    Dismissed,
-    #[sqlx(rename = "deferred")]
-    Deferred,
-}
-
-impl std::fmt::Display for ReconnectStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ReconnectStatus::Pending => write!(f, "pending"),
-            ReconnectStatus::Sent => write!(f, "sent"),
-            ReconnectStatus::Dismissed => write!(f, "dismissed"),
-            ReconnectStatus::Deferred => write!(f, "deferred"),
-        }
-    }
-}
-
-/// Database row returned from task queries
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskRow {
-    pub task_id: Uuid,
-    pub contact_id: Uuid,
-    pub vcard_uid: String,
-    pub full_name: String,
-    pub email: Option<String>,
-    pub body: String,
-    pub status: TaskStatus,
 }
 
 /// A contact spotlighted in the weekly random-pick dashboard section.
@@ -190,48 +139,12 @@ pub struct DueReconnectInfo {
     pub tag: String,
 }
 
-/// An open TODO parsed from a contact vCard (not stored in PostgreSQL).
+/// An open TODO parsed from a contact vCard.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingTaskInfo {
     pub uid: String,
     pub full_name: String,
     pub description: String,
-}
-
-/// Database row returned from reconnect queries
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReconnectRow {
-    pub reconnect_id: Uuid,
-    pub contact_id: Uuid,
-    pub vcard_uid: String,
-    pub full_name: String,
-    pub email: Option<String>,
-    pub due_date: NaiveDate,
-    pub original_tag: String,
-    pub status: ReconnectStatus,
-}
-
-/// Items due for the current digest
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DueItems {
-    pub tasks: Vec<TaskRow>,
-    pub reconnects: Vec<ReconnectRow>,
-}
-
-/// Result of upserting contacts
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpsertResult {
-    pub contacts_upserted: usize,
-    pub tasks_created: usize,
-    pub reconnects_created: usize,
-}
-
-/// Counts for logging digest runs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DigestCounts {
-    pub contact_count: i32,
-    pub task_count: i32,
-    pub reconnect_count: i32,
 }
 
 /// ICS file attachment
@@ -250,7 +163,7 @@ pub struct TravelTrip {
 }
 
 /// Why a contact was suggested for a trip.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchReason {
     TaggedBeforeTrip,
@@ -258,7 +171,7 @@ pub enum MatchReason {
 }
 
 /// One contact suggested for a trip.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct TravelMatch {
     pub uid: String,
     pub full_name: String,
@@ -269,7 +182,7 @@ pub struct TravelMatch {
 }
 
 /// A trip with ranked contact matches (weekly snapshot unit).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct TravelTripWithMatches {
     pub title: String,
     pub start: NaiveDate,
@@ -278,7 +191,7 @@ pub struct TravelTripWithMatches {
 }
 
 /// Cached output for one target week (`next week`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct TravelWeekSnapshot {
     pub week_id: String,
     pub week_start: NaiveDate,

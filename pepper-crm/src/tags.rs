@@ -354,6 +354,23 @@ pub fn is_random_pick_eligible(contact: &crate::models::Contact) -> bool {
     !is_venue_contact(contact)
 }
 
+/// True when vCard `REV` or a past `Month YYYY:` note falls within `window_months` of `as_of`.
+pub fn has_recent_interaction_for_travel(
+    rev: Option<NaiveDate>,
+    note: &str,
+    as_of: NaiveDate,
+) -> bool {
+    let Some(cutoff) =
+        as_of.checked_sub_months(chrono::Months::new(TRAVEL_INTERACTION_WINDOW_MONTHS))
+    else {
+        return false;
+    };
+    if rev.is_some_and(|d| d <= as_of && d >= cutoff) {
+        return true;
+    }
+    has_recent_month_year_interaction_note(note, as_of, TRAVEL_INTERACTION_WINDOW_MONTHS)
+}
+
 /// Whether a contact should appear in weekly travel match lists.
 pub fn is_travel_match_eligible(contact: &crate::models::Contact, as_of: NaiveDate) -> bool {
     if is_do_not_engage(&contact.categories) {
@@ -365,14 +382,7 @@ pub fn is_travel_match_eligible(contact: &crate::models::Contact, as_of: NaiveDa
     if is_venue_contact(contact) {
         return false;
     }
-    let Some(anchor) = reconnect_anchor_date(contact.rev, &contact.note_raw, as_of) else {
-        return false;
-    };
-    let Some(cutoff) = as_of.checked_sub_months(chrono::Months::new(TRAVEL_INTERACTION_WINDOW_MONTHS))
-    else {
-        return false;
-    };
-    if anchor < cutoff {
+    if !has_recent_interaction_for_travel(contact.rev, &contact.note_raw, as_of) {
         return false;
     }
     is_reconnect_due_for_travel(
@@ -618,6 +628,54 @@ mod tests {
     }
 
     #[test]
+    fn test_has_recent_interaction_for_travel() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 19).unwrap();
+        assert!(!has_recent_interaction_for_travel(
+            None,
+            "Met at conference, no month stamp.",
+            as_of
+        ));
+        assert!(has_recent_interaction_for_travel(
+            Some(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()),
+            "",
+            as_of
+        ));
+        assert!(has_recent_interaction_for_travel(
+            None,
+            "May 2025: Met at party.",
+            as_of
+        ));
+        assert!(!has_recent_interaction_for_travel(
+            Some(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+            "May 2020: Old note only.",
+            as_of
+        ));
+        assert!(has_recent_interaction_for_travel(
+            Some(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+            "May 2025: Recent note despite stale REV.",
+            as_of
+        ));
+    }
+
+    #[test]
+    fn test_is_travel_match_eligible_respects_reconnect_snooze() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 19).unwrap();
+        let mut c = sample_contact("t1", "Pat");
+        c.note_raw = "March 2025: Met at party.".into();
+        c.categories = vec!["Reconnect: 2 months".into()];
+        c.reconnect_tag = Some("2 months".into());
+        c.rev = Some(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap());
+        assert!(!is_reconnect_due_for_travel(
+            &c.categories,
+            &c.note_raw,
+            c.reconnect_tag.as_deref(),
+            c.rev,
+            as_of
+        ));
+        assert!(!is_travel_match_eligible(&c, as_of));
+    }
+
+    #[test]
     fn test_is_reconnect_due_for_travel() {
         let as_of = NaiveDate::from_ymd_opt(2026, 5, 19).unwrap();
         let rev = NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
@@ -652,6 +710,7 @@ mod tests {
             phone: None,
             urls: vec![],
             org: None,
+            street: None,
             city: None,
             state: None,
             country: None,
@@ -758,6 +817,7 @@ mod tests {
             phone: None,
             urls: vec![],
             org: None,
+            street: None,
             city: Some("Boston".into()),
             state: Some("MA".into()),
             country: None,

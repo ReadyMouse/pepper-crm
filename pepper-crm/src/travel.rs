@@ -83,7 +83,8 @@ impl TravelBuildConfig {
                 let lower = s.to_lowercase();
                 lower != "0" && lower != "false" && lower != "no"
             })
-            .unwrap_or(true);
+            .unwrap_or(true)
+            && !crate::vcard::contacts_read_only();
         Self {
             contacts_dir,
             cache_root,
@@ -147,7 +148,7 @@ async fn build_travel_week_snapshot_async(
 
     let mut trip_results = Vec::new();
     for trip in trips {
-        let matches = match_contacts_for_trip_async(
+        let matches = match match_contacts_for_trip_async(
             &trip,
             &contacts,
             geocoder,
@@ -155,7 +156,20 @@ async fn build_travel_week_snapshot_async(
             config.as_of,
             run_geo_ensure,
         )
-        .await?;
+        .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    trip = %trip.title,
+                    start = %trip.start,
+                    end = %trip.end,
+                    error = %e,
+                    "Skipping trip — could not geocode destination"
+                );
+                continue;
+            }
+        };
         trip_results.push(TravelTripWithMatches {
             title: trip.title.clone(),
             start: trip.start,
@@ -218,14 +232,26 @@ pub fn build_travel_week_snapshot_with_geocoder<G: Geocoder>(
 
     let mut trip_results = Vec::new();
     for trip in trips {
-        let matches = match_contacts_for_trip(
+        let matches = match match_contacts_for_trip(
             &trip,
             &contacts,
             geocoder,
             config.metro_radius_km,
             config.as_of,
             run_geo_ensure,
-        )?;
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    trip = %trip.title,
+                    start = %trip.start,
+                    end = %trip.end,
+                    error = %e,
+                    "Skipping trip — could not geocode destination"
+                );
+                continue;
+            }
+        };
         trip_results.push(TravelTripWithMatches {
             title: trip.title.clone(),
             start: trip.start,
@@ -436,6 +462,7 @@ mod tests {
             phone: None,
             urls: vec![],
             org: None,
+            street: None,
             city: Some(city.to_string()),
             state: Some(state.to_string()),
             country: Some("USA".to_string()),

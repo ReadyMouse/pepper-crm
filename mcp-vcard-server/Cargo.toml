@@ -6,7 +6,7 @@
 #   - N/A (package metadata and dependency declarations)
 #
 # OUTPUT:
-#   - `mcp-vcard-server` binary exposing `parse_vcards` and `log_interaction` MCP tools
+#   - `mcp-vcard-server` binary exposing `parse_vcards` and `log_interaction` MCP tools (VCF or CardDAV)
 #
 # NOTES:
 #   - Uses pepper-crm for VCF parsing and append-only interaction logging
@@ -30,6 +30,7 @@ rmcp = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -1,8 +1,17 @@
-//! List contacts from CardDAV (or local VCF if CARDDAV_* not set).
+//! # CardDAV List Example
 //!
-//! ```bash
-//! cargo run -p pepper-crm --example carddav_list
-//! ```
+//!   CLI demo that loads contacts from CardDAV or local VCF and prints a short summary.
+//!
+//! INPUT:
+//!   - `CARDDAV_URL`, `CARDDAV_USER`, `CARDDAV_PASS` (optional; falls back to `CONTACTS_DIR`).
+//!
+//! OUTPUT:
+//!   - stdout listing contact count and source (CardDAV vs local path).
+//!
+//! NOTES:
+//!   - Run: `cargo run -p pepper-crm --example carddav_list`
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use anyhow::Result;
 use pepper_crm::{contacts_use_carddav, load_dotenv, parse_contacts};

@@ -1,7 +1,17 @@
-//! Send a short test email using SMTP settings from `.env`.
+//! # SMTP Test Example
 //!
-//! Usage (from repo root):
-//!   cargo run -q -p pepper-crm --example test_smtp
+//!   Sends a short HTML test email using SMTP settings from `.env`.
+//!
+//! INPUT:
+//!   - `DIGEST_RECIPIENT`, `SMTP_*` env vars (via `load_dotenv`).
+//!
+//! OUTPUT:
+//!   - One test email delivered to `DIGEST_RECIPIENT`.
+//!
+//! NOTES:
+//!   - Run: `cargo run -q -p pepper-crm --example test_smtp`
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use anyhow::{Context, Result};
 use pepper_crm::{load_dotenv, send_html_email};

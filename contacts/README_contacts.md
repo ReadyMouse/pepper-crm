@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Directory of vCard (`.vcf`) files used as the people store during local prototyping. Pepper reads these at runtime; PostgreSQL holds task state only, not contact profile duplicates.
+Directory of vCard (`.vcf`) files used as the people store during local prototyping. Pepper reads these at runtime; tasks and reconnect state also live in vCard fields.
 
 ## Contents
 

@@ -7,7 +7,7 @@ INPUT:
   - Product requirements, vCard/tag conventions, MCP transport decisions
 
 OUTPUT:
-  - Design principles, crate layout, database schema, weekly run sequence
+  - Design principles, crate layout, weekly run sequence
 
 NOTES:
   - Some crate names differ from implementation (e.g. crm-core → pepper-crm); README is canonical for current layout.
@@ -26,23 +26,23 @@ Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 ## What We Are Building
 
-A lightweight personal CRM agent built as a Rust MCP server workspace. It reads contact data from `.vcf` (vCard) files, parses structured tags from the notes field, manages task state in PostgreSQL, and sends a weekly HTML email digest with `.ics` calendar attachments for upcoming follow-ups.
+A lightweight personal CRM agent built as a Rust MCP server workspace. It reads contact data from `.vcf` (vCard) files, parses structured tags from the notes field, sends a weekly HTML email digest with `.ics` calendar attachments for upcoming follow-ups, and surfaces travel-based reconnect suggestions.
 
 The system runs as a weekly cron job today. It is architected as MCP servers from day one so that a Claude agent can call the same tools directly in the future — with no changes to the servers themselves.
 
-**It does not:** run a persistent web server, expose a public API, or touch a live contact book during prototyping.
+**It does not:** require a database or duplicate contact data outside vCards.
 
-**It does:** read local VCF files, write interaction logs back to them, manage task state in Postgres, generate `.ics` files, and send one useful email per week.
+**It does:** read local VCF files, write interaction logs back to them, track tasks and reconnects in vCard fields, generate `.ics` files, and send one useful email per week.
 
 ---
 
 ## Core Design Principles
 
-- **VCF is the people store.** Contact data lives in vCards. The database holds only task state and logs — never duplicates contact fields.
+- **VCF is the source of truth.** Contact data, tasks (`TODO:` in NOTE), and reconnect intervals (`Reconnect:` in CATEGORIES) all live in vCards.
 - **Notes field is human-readable first.** Tags are plain text that a human can read and edit in any contacts app. No binary formats, no proprietary fields.
 - **Write-back is append-only.** The agent never modifies existing note content. It only appends to a clearly delimited log block below a `--- CRM Log ---` separator.
 - **Last tag wins.** If `Reconnect:` appears multiple times in a note, the last one is authoritative. Re-scheduling means appending a new tag, not editing the old one.
-- **Dry-run always works.** The `--dry-run` flag must be safe at any time. No emails sent, no DB writes, no VCF modifications.
+- **Dry-run always works.** The `--dry-run` flag must be safe at any time. No emails sent, no VCF modifications.
 - **Prototype locally, promote to Pi.** The only change between local prototype and Pi production is the contacts source (local files vs. CardDAV) and the cron schedule.
 - **stdio now, HTTP/SSE later.** MCP servers use stdio transport during development. Switching to HTTP/SSE transport makes them persistent daemons callable by a live agent — no tool signatures change.
 
@@ -51,8 +51,8 @@ The system runs as a weekly cron job today. It is architected as MCP servers fro
 ## Prototype Scope (Build This First)
 
 - Read `.vcf` files from a local directory (`./contacts/`)
-- Parse `TODO:` and `Reconnect:` tags from the `NOTE` field
-- Store task state in PostgreSQL (pending / done / snoozed)
+- Parse `TODO:` and `Reconnect:` tags from vCard fields
+- Compute due tasks and reconnects directly from parsed contacts
 - Generate a weekly HTML email digest
 - Attach `.ics` files for reconnect reminders
 - Send via SMTP
@@ -85,15 +85,10 @@ personal-crm/
 │       ├── lib.rs
 │       ├── vcard.rs            # VCF parsing and write-back
 │       ├── tags.rs             # TODO:/Reconnect: tag extraction
-│       ├── db.rs               # sqlx Postgres connection + queries
-│       ├── models.rs           # shared structs (Contact, Task, Reconnect)
+│       ├── models.rs           # shared structs (Contact, DueReconnectInfo, etc.)
 │       └── ical.rs             # .ics generation helpers
 │
 ├── mcp-vcard-server/               # MCP server binary: read/write VCF
-│   ├── Cargo.toml
-│   └── src/main.rs
-│
-├── mcp-scheduler-server/           # MCP server binary: what's due this week
 │   ├── Cargo.toml
 │   └── src/main.rs
 │
@@ -113,8 +108,6 @@ personal-crm/
 │   ├── Cargo.toml
 │   └── src/main.rs
 │
-├── migrations/
-│   └── 001_initial.sql         # PostgreSQL schema
 ├── templates/
 │   └── digest.html             # Tera email template
 └── tests/
@@ -296,49 +289,14 @@ Rules:
 
 ---
 
-## PostgreSQL Schema
+## Task and reconnect state (vCard)
 
-```sql
--- migrations/001_initial.sql
+Tasks and reconnect scheduling are stored in vCard fields — not a separate database:
 
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+- **Tasks:** `TODO:` lines in the `NOTE` field (removed on completion via write-back)
+- **Reconnects:** `Reconnect:` in `CATEGORIES` (or legacy NOTE), with due dates computed from `REV` or note anchors
 
-CREATE TABLE contacts (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    vcard_uid       TEXT UNIQUE NOT NULL,
-    full_name       TEXT NOT NULL,
-    email           TEXT,
-    last_synced_at  TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE tasks (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    contact_id      UUID REFERENCES contacts(id) ON DELETE CASCADE,
-    body            TEXT NOT NULL,
-    status          TEXT DEFAULT 'pending' CHECK (status IN ('pending','done','snoozed')),
-    created_at      TIMESTAMPTZ DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE reconnects (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    contact_id      UUID REFERENCES contacts(id) ON DELETE CASCADE,
-    due_date        DATE NOT NULL,
-    status          TEXT DEFAULT 'pending' CHECK (status IN ('pending','sent','dismissed','deferred')),
-    original_tag    TEXT,
-    created_at      TIMESTAMPTZ DEFAULT NOW(),
-    sent_at         TIMESTAMPTZ
-);
-
-CREATE TABLE digest_log (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    sent_at         TIMESTAMPTZ DEFAULT NOW(),
-    recipient       TEXT,
-    contact_count   INTEGER,
-    task_count      INTEGER,
-    reconnect_count INTEGER
-);
-```
+> **Historical note:** An early prototype used PostgreSQL (`migrations/001_initial.sql`, `db.rs`, `mcp-scheduler-server`). That layer was removed; vCards are the sole store.
 
 ---
 
@@ -388,24 +346,14 @@ pub fn append_log_entry(note: &str, entry: &str, new_tag: Option<&str>) -> Strin
 - `"3 months"` → from + 3 months (chrono month arithmetic)
 - `"before NY trip"` → `None` (city trigger, caller sets status to `deferred`)
 
-### `db.rs`
+### `tasks.rs`
 
-Async wrapper around `sqlx`. Connection pool passed as parameter — no global state.
-
-```rust
-pub async fn upsert_contact(pool: &PgPool, contact: &Contact) -> Result<Uuid>
-pub async fn upsert_task(pool: &PgPool, contact_id: Uuid, body: &str) -> Result<Uuid>
-pub async fn upsert_reconnect(pool: &PgPool, contact_id: Uuid, due_date: NaiveDate, tag: &str) -> Result<Uuid>
-pub async fn get_due_tasks(pool: &PgPool, as_of: NaiveDate) -> Result<Vec<TaskRow>>
-pub async fn get_due_reconnects(pool: &PgPool, window_days: u32) -> Result<Vec<ReconnectRow>>
-pub async fn mark_reconnect_sent(pool: &PgPool, id: Uuid) -> Result<()>
-pub async fn log_digest(pool: &PgPool, recipient: &str, counts: DigestCounts) -> Result<()>
-```
+Reads open `TODO:` items from parsed contacts and removes completed lines on write-back.
 
 ### `ical.rs`
 
 ```rust
-pub fn build_ics(reconnect: &ReconnectRow) -> String
+pub fn build_ics(reconnect: &DueReconnectInfo) -> Result<IcsFile>
 // Returns a complete VCALENDAR string for one reconnect event
 // SUMMARY: "Follow up: [Full Name]"
 // DTSTART: due_date as all-day event
@@ -457,8 +405,6 @@ fake        = "2"           # test data generation
 ```bash
 # .env.example
 
-DATABASE_URL=postgres://crm_user:yourpassword@localhost:5432/personal_crm
-
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=you@gmail.com
@@ -479,11 +425,7 @@ git clone [repo]
 cd personal-crm
 cargo build
 
-# 2. Set up Postgres
-createdb personal_crm
-psql personal_crm < migrations/001_initial.sql
-
-# 3. Configure
+# 2. Configure
 cp .env.example .env
 # edit .env with your SMTP credentials and DB password
 

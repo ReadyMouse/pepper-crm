@@ -12,18 +12,18 @@
 
 # Pepper Web Dashboard
 
-Localhost web UI for visualizing and testing Pepper CRM data. See the root [`README.md`](../README.md) for full project setup.
+Localhost web UI for visualizing and testing Pepper CRM data. See the root [`README.md`](../README.md) for full project setup and [`README_pepper-web.md`](README_pepper-web.md) for folder-level crate overview.
 
 ## Quick Start
 
 ```bash
-# From repo root — requires DATABASE_URL in .env
+# From repo root
 cargo run --bin pepper-web
 ```
 
 Open **http://localhost:3000**
 
-The server syncs VCF contacts to PostgreSQL on startup. For travel matches, set `GOOGLE_CALENDAR_ICS_URL` in `.env`, then click **Refresh travel matches** on the dashboard.
+The server loads contacts from VCF (or CardDAV) on startup. For travel matches, set `GOOGLE_CALENDAR_ICS_URL` in `.env`, then click **Refresh travel matches** on the dashboard.
 
 ## Pages
 
@@ -38,7 +38,7 @@ The server syncs VCF contacts to PostgreSQL on startup. For travel matches, set 
 
 - **Stats** — counts for pending tasks, reconnects due, travel matches
 - **Reconnects Due** — timed `Reconnect:` intervals due within 7 days; snooze writes back to VCF
-- **Pending Tasks** — open `TODO:` items synced from VCF → PostgreSQL
+- **Pending Tasks** — open `TODO:` items from vCard NOTE fields
 - **Next Week Travel** — metro-radius matching from Google Calendar + contact addresses; refresh on demand with configurable radius
 
 ### Coming soon
@@ -98,7 +98,6 @@ pepper-web/
 
 - **Axum** — web framework
 - **Tera** — templates
-- **SQLx** — PostgreSQL
 - **Tower-HTTP** — tracing, static file serving
 - **pepper-crm** — VCF parsing, due items, travel matching
 

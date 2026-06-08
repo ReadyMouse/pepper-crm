@@ -1,4 +1,19 @@
-//! Regression: dashboard template render must not overflow a small thread stack.
+//! # Dashboard Template Render Regression Test
+//!
+//!   Ensures `dashboard.html` renders on a small thread stack without overflow.
+//!
+//! INPUT:
+//!   - `pepper-web/templates/dashboard.html` and `partials/header.html`.
+//!   - Minimal Tera context mirroring production dashboard variables.
+//!
+//! OUTPUT:
+//!   - Passing test when HTML renders and key sections are present.
+//!
+//! NOTES:
+//!   - Guards against deep Tera recursion or template growth regressions.
+//!   - Run: `cargo test -p pepper-web --test dashboard_render`
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use std::path::PathBuf;
 use tera::{Context, Tera};
@@ -79,6 +94,8 @@ fn render_dashboard_does_not_stack_overflow() {
     context.insert("travel_refresh_error", &false);
     context.insert("geo_just_finished", &false);
     context.insert("geo_refresh_error", &false);
+    context.insert("enrichment_geo_failed", &false);
+    context.insert("contacts_read_only", &false);
     context.insert("geo_geocoded_count", &0usize);
     context.insert("geo_failed_count", &0usize);
     context.insert("geo_with_coords", &0usize);
@@ -86,6 +103,14 @@ fn render_dashboard_does_not_stack_overflow() {
     context.insert("birthdays", &Vec::<serde_json::Value>::new());
     context.insert("birthday_count", &0usize);
     context.insert("birthday_window_days", &14u32);
+    context.insert("enrichment_picks", &Vec::<serde_json::Value>::new());
+    context.insert("enrichment_pick_count", &0usize);
+    context.insert("enrichment_eligible_count", &0usize);
+    context.insert("enrichment_pick_target", &3usize);
+    context.insert("enrichment_fewer_than_target", &false);
+    context.insert("enrichment_location_saved", &false);
+    context.insert("enrichment_geo_ok", &false);
+    context.insert("enrichment_geo_failed", &false);
 
     let html = tera.render("dashboard.html", &context).expect("render");
     assert!(html.contains("Random People of the Week"));

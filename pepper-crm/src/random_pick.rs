@@ -410,6 +410,7 @@ mod tests {
             phone: None,
             urls: vec![],
             org: None,
+            street: None,
             city: None,
             state: None,
             country: None,

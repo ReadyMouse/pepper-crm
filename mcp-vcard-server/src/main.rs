@@ -1,30 +1,44 @@
 //! # MCP vCard Server
 //!
-//!   MCP server (stdio) for reading contact VCF files and appending CRM interaction logs.
+//!   MCP server (stdio) for reading contacts and appending CRM interaction logs.
 //!
 //! INPUT:
-//!   - MCP tool `parse_vcards`: `{ "directory": "<path>" }` — directory of `.vcf` files
-//!   - MCP tool `log_interaction`: `{ "vcf_path", "note", "new_reconnect_tag"? }`
+//!   - Env: optional `CONTACTS_DIR`; when `CARDDAV_*` is set, contacts load/write via CardDAV
+//!   - MCP tool `parse_vcards`: `{ "directory"?: "<path>" }` — local `.vcf` dir (ignored for reads when CardDAV configured)
+//!   - MCP tool `log_interaction`: `{ "uid", "note", "new_reconnect_tag"?, "contacts_dir"? }`
 //!
 //! OUTPUT:
 //!   - `parse_vcards` → `[ContactSummary, ...]` with uid, full_name, email, phone, org,
-//!     city, state, country, categories, note_raw, todos, reconnect_tag, vcf_path
+//!     city, state, country, categories, note_raw, todos, reconnect_tag, vcf_path, carddav_href?
 //!   - `log_interaction` → confirmation string (e.g. `"Logged interaction to <name>"`)
 //!
 //! NOTES:
 //!   - Server name: `mcp-vcard-server`
-//!   - `log_interaction` rewrites the contact VCF append-only (note + optional reconnect tag)
+//!   - `log_interaction` writes append-only CRM log (local file or CardDAV PUT)
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
-use anyhow::Result;
-use pepper_crm::{parse_vcard, parse_vcards_from_dir, log_interaction, Contact};
-use rmcp::*;
+use pepper_crm::{
+    contacts_use_carddav, find_contact_by_uid, load_dotenv, log_interaction, parse_contacts,
+    Contact,
+};
+use rmcp::{
+    ServerHandler, ServiceExt,
+    handler::server::{router::tool::ToolRouter, wrapper::{Json, Parameters}},
+    model::{ServerCapabilities, ServerInfo},
+    tool, tool_handler, tool_router,
+    transport::stdio,
+};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::info;
 
-#[derive(Debug, Serialize)]
+fn default_contacts_dir() -> String {
+    std::env::var("CONTACTS_DIR").unwrap_or_else(|_| "./contacts".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 struct ContactSummary {
     uid: String,
     full_name: String,
@@ -39,6 +53,7 @@ struct ContactSummary {
     todos: Vec<String>,
     reconnect_tag: Option<String>,
     vcf_path: String,
+    carddav_href: Option<String>,
 }
 
 impl From<Contact> for ContactSummary {
@@ -57,71 +72,105 @@ impl From<Contact> for ContactSummary {
             todos: c.todos,
             reconnect_tag: c.reconnect_tag,
             vcf_path: c.vcf_path.display().to_string(),
+            carddav_href: c.carddav_href,
         }
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 struct ParseVcardsArgs {
+    #[serde(default = "default_contacts_dir")]
     directory: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 struct LogInteractionArgs {
-    vcf_path: String,
+    uid: String,
     note: String,
     new_reconnect_tag: Option<String>,
+    #[serde(default = "default_contacts_dir")]
+    contacts_dir: String,
 }
 
-async fn handle_parse_vcards(args: ParseVcardsArgs) -> Result<Vec<ContactSummary>> {
-    info!("Parsing VCF files from: {}", args.directory);
-    
-    let dir = PathBuf::from(args.directory);
-    let contacts = parse_vcards_from_dir(&dir)?;
-    
-    info!("Parsed {} contacts", contacts.len());
-    
-    Ok(contacts.into_iter().map(ContactSummary::from).collect())
+#[derive(Clone)]
+struct VcardServer {
+    tool_router: ToolRouter<Self>,
 }
 
-async fn handle_log_interaction(args: LogInteractionArgs) -> Result<String> {
-    info!("Logging interaction to: {}", args.vcf_path);
-    
-    let vcf_path = PathBuf::from(&args.vcf_path);
-    let contact = parse_vcard(&vcf_path)?;
-    
-    log_interaction(
-        &contact,
-        &args.note,
-        args.new_reconnect_tag.as_deref(),
-    )?;
-    
-    Ok(format!("Logged interaction to {}", contact.full_name))
+impl VcardServer {
+    fn new() -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+        }
+    }
+}
+
+#[tool_router]
+impl VcardServer {
+    #[tool(description = "Parse all contacts from CONTACTS_DIR or CardDAV when CARDDAV_* is set")]
+    fn parse_vcards(
+        &self,
+        Parameters(args): Parameters<ParseVcardsArgs>,
+    ) -> Result<Json<Vec<ContactSummary>>, String> {
+        let dir = PathBuf::from(&args.directory);
+        if contacts_use_carddav() {
+            info!("Parsing contacts from CardDAV (CONTACTS_DIR ignored for reads)");
+        } else {
+            info!("Parsing VCF files from: {}", dir.display());
+        }
+
+        let contacts = parse_contacts(&dir).map_err(|e| e.to_string())?;
+        info!("Parsed {} contacts", contacts.len());
+        Ok(Json(
+            contacts.into_iter().map(ContactSummary::from).collect(),
+        ))
+    }
+
+    #[tool(
+        description = "Log an interaction to a contact (append-only CRM log; local VCF or CardDAV PUT)"
+    )]
+    fn log_interaction(
+        &self,
+        Parameters(args): Parameters<LogInteractionArgs>,
+    ) -> Result<String, String> {
+        info!("Logging interaction for uid: {}", args.uid);
+
+        let dir = PathBuf::from(&args.contacts_dir);
+        let contact = find_contact_by_uid(&dir, &args.uid).map_err(|e| e.to_string())?;
+
+        log_interaction(
+            &contact,
+            &args.note,
+            args.new_reconnect_tag.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok(format!("Logged interaction to {}", contact.full_name))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for VcardServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            instructions: Some(
+                "Read and update Pepper CRM contacts from local VCF files or CardDAV (Radicale on Pi). \
+                 Set CARDDAV_URL, CARDDAV_USER, and CARDDAV_PASS for production."
+                    .into(),
+            ),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            ..Default::default()
+        }
+    }
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    
+    load_dotenv()?;
+
     info!("Starting mcp-vcard-server");
-    
-    let server = Server::new("mcp-vcard-server")
-        .with_tool(
-            "parse_vcards",
-            "Parse all VCF files from a directory",
-            |args: ParseVcardsArgs| async move {
-                handle_parse_vcards(args).await
-            },
-        )
-        .with_tool(
-            "log_interaction",
-            "Log an interaction to a contact's VCF file (append-only CRM log)",
-            |args: LogInteractionArgs| async move {
-                handle_log_interaction(args).await
-            },
-        );
-    
-    server.run_stdio().await?;
-    
+    let service = VcardServer::new().serve(stdio()).await?;
+    service.waiting().await?;
     Ok(())
 }

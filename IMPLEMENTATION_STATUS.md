@@ -27,10 +27,10 @@ Living summary of what's built vs. planned. For setup and usage, see [`README.md
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| `models.rs` | ✅ | Contact, Task, Reconnect, travel structs |
+| `models.rs` | ✅ | Contact, pending task/reconnect, travel structs |
 | `vcard.rs` | ✅ | Parse/write VCF, geo fields, snooze write-back |
 | `tags.rs` | ✅ | `TODO:` in NOTE; `Reconnect:` in CATEGORIES (+ legacy NOTE) |
-| `db.rs` | ✅ | PostgreSQL via sqlx — task state only |
+| `tasks.rs` | ✅ | Pending TODOs from vCard NOTE fields |
 | `ical.rs` | ✅ | `.ics` with VALARM |
 | `calendar.rs` | ✅ | Google Calendar ICS fetch, next-week trips |
 | `geo.rs` | ✅ | Nominatim geocoding + query cache |
@@ -56,7 +56,6 @@ All servers use stdio transport via `rmcp`:
 | Crate | Tools | Status |
 |-------|-------|--------|
 | `mcp-vcard-server` | `parse_vcards`, `log_interaction` | ✅ |
-| `mcp-scheduler-server` | `upsert_contacts`, `get_due` | ✅ |
 | `mcp-digest-server` | `render_digest` | ✅ |
 | `mcp-cal-server` | `export_ics` | ✅ |
 | `mcp-mailer-server` | `send_email` | ✅ |
@@ -70,8 +69,8 @@ All servers use stdio transport via `rmcp`:
 
 | Feature | Status |
 |---------|--------|
-| VCF → PostgreSQL sync on startup | ✅ |
-| Pending tasks list | ✅ |
+| Loads contacts from VCF/CardDAV on startup | ✅ |
+| Pending tasks list (from vCard NOTE) | ✅ |
 | Reconnects due (7-day window) | ✅ |
 | Digest preview (`/preview`) | ✅ |
 | Next Week Travel (calendar + geo + metro match) | ✅ |
@@ -83,8 +82,7 @@ All servers use stdio transport via `rmcp`:
 ### Infrastructure
 
 - ✅ Cargo workspace (all members build)
-- ✅ PostgreSQL migration (`migrations/001_initial.sql`)
-- ✅ `.env.example` (DB, SMTP, calendar, geocoding)
+- ✅ `.env.example` (SMTP, calendar, geocoding, contacts)
 - ✅ 20 generated test VCFs in `contacts/`
 - ✅ Email template (`templates/digest.html`)
 - ✅ Brand assets (`assets/brand/`)
@@ -95,8 +93,8 @@ All servers use stdio transport via `rmcp`:
 
 | Item | Notes |
 |------|-------|
-| CardDAV read/write | `CARDDAV_*` env → REPORT fetch + PUT write (Radicale) |
-| HTTP/SSE MCP transport | stdio only today |
+| CardDAV read/write | ✅ `CARDDAV_*` env → REPORT fetch + PUT write (Radicale); wired in `pepper-crm`, `pepper-web`, `mcp-vcard-server` |
+| HTTP/SSE MCP transport | stdio only today (rmcp 0.16 macro API) |
 | Matrix bot | Future chat interface |
 | Random Person API enrichment (auto-suggest URLs) | Spec in `DASHBOARD_SECTIONS.md` — dashboard has search/mailto links only |
 | Travel section in weekly digest email | Dashboard only for now |
@@ -111,7 +109,6 @@ All servers use stdio transport via `rmcp`:
 pepper-crm/
 ├── pepper-crm/              ✅ core library
 ├── mcp-vcard-server/        ✅
-├── mcp-scheduler-server/    ✅
 ├── mcp-digest-server/       ✅
 ├── mcp-cal-server/          ✅
 ├── mcp-mailer-server/       ✅
@@ -120,7 +117,6 @@ pepper-crm/
 ├── pepper/                  ✅ weekly runner
 ├── pepper-web/              ✅ dashboard
 ├── contacts/                ✅ test VCFs
-├── migrations/              ✅
 ├── templates/               ✅ digest email
 ├── assets/brand/            ✅
 └── .cache/                  geocode + travel snapshots (gitignored)
@@ -134,11 +130,9 @@ pepper-crm/
 cargo build --workspace
 cargo test -p pepper-crm
 
-createdb pepper_crm
-psql pepper_crm < migrations/001_initial.sql
 cp .env.example .env
 
-./target/debug/pepper --dry-run          # sync + preview digest
+./target/debug/pepper --dry-run          # preview digest
 cargo run --bin pepper-web               # dashboard
 ./target/debug/pepper                    # send weekly digest
 ```
@@ -161,6 +155,6 @@ CATEGORIES:Reconnect: 3 months
 
 Also supports trip triggers (`before Chicago trip`), `Reconnect: Never`, and legacy `Reconnect:` lines in `NOTE`.
 
-**Engagement categories** ([`README.md`](README.md#engagement-categories-in-categories)): `is_reconnect_never()`, `is_do_not_engage()` in `tags.rs`; wired through travel, random pick, due reconnects, DB sync, and dashboard task list.
+**Engagement categories** ([`README.md`](README.md#engagement-categories-in-categories)): `is_reconnect_never()`, `is_do_not_engage()` in `tags.rs`; wired through travel, random pick, due reconnects, and dashboard task list.
 
 Due dates anchor from vCard `REV` or latest `Month YYYY:` note line.

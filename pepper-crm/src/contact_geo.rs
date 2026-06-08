@@ -15,7 +15,10 @@
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
-use crate::geo::{normalize_geocode_query, GeoPoint, Geocoder, NominatimGeocoder};
+use crate::geo::{
+    is_plausible_geo_point, normalize_geocode_query, FileGeocodeCache, GeoPoint, Geocoder,
+    NominatimGeocoder,
+};
 use crate::models::Contact;
 use crate::vcard::{
     contact_address_query, geocode_queries_for_contact, parse_contacts, write_contact_geo,
@@ -274,6 +277,86 @@ fn apply_geocode_to_contact(
     contact.geo_source = Some(source.to_string());
 }
 
+/// Result of geocoding one contact after a dashboard location save.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeocodeContactOutcome {
+    /// GEO already matches the current address.
+    AlreadyOk,
+    /// Nominatim (or cache) returned coordinates and optional vCard write-back ran.
+    Geocoded,
+    /// Address fields are not enough to build a geocode query.
+    NoQueries,
+    /// All query variants failed (miss may be cached under `.cache/geocode/fail/`).
+    Failed,
+}
+
+/// Geocode a single contact after location write-back (Nominatim ~1 req/s when uncached).
+pub async fn geocode_contact_after_location(
+    contact: &mut Contact,
+    cache_root: impl AsRef<Path>,
+    write_back: bool,
+) -> Result<GeocodeContactOutcome> {
+    let queries = geocode_queries_for_contact(contact);
+    if queries.is_empty() {
+        return Ok(GeocodeContactOutcome::NoQueries);
+    }
+    if let Some(point) = stamp_legacy_geo_if_needed(contact, write_back) {
+        contact.geo = Some(point);
+        return Ok(GeocodeContactOutcome::AlreadyOk);
+    }
+    if let Some(point) = contact.geo {
+        if is_plausible_geo_point(point) && !needs_geocoding(contact) {
+            return Ok(GeocodeContactOutcome::AlreadyOk);
+        }
+    }
+    let geocoder = NominatimGeocoder::from_env(cache_root)?;
+    if queries
+        .iter()
+        .all(|q| geocoder.is_failure_cached(q).unwrap_or(false))
+    {
+        return Ok(GeocodeContactOutcome::Failed);
+    }
+    match geocoder.geocode_queries_async(&queries).await {
+        Ok((point, matched_query)) => {
+            let source = normalize_geocode_query(&matched_query);
+            apply_geocode_to_contact(contact, point, &source, write_back);
+            Ok(GeocodeContactOutcome::Geocoded)
+        }
+        Err(e) => {
+            tracing::debug!(uid = %contact.uid, error = %e, "contact geocode after location save failed");
+            Ok(GeocodeContactOutcome::Failed)
+        }
+    }
+}
+
+/// True when every geocode query for this contact has a recent failure in the file cache.
+pub fn contact_geocode_queries_all_failed(
+    cache_root: impl AsRef<Path>,
+    contact: &Contact,
+) -> Result<bool> {
+    let queries = geocode_queries_for_contact(contact);
+    if queries.is_empty() {
+        return Ok(false);
+    }
+    let ttl_days = std::env::var("GEOCODE_CACHE_TTL_DAYS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(7);
+    let cache = FileGeocodeCache::new(cache_root, ttl_days);
+    Ok(queries
+        .iter()
+        .all(|q| cache.is_failure_cached(q).unwrap_or(false)))
+}
+
+/// GEO on card is missing, invalid, or out of sync with the parsed address.
+pub fn contact_has_unusable_geo(contact: &Contact) -> bool {
+    match contact.geo {
+        None => false,
+        Some(p) if !is_plausible_geo_point(p) => true,
+        Some(_) => is_geo_stale(contact),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +371,7 @@ mod tests {
             phone: None,
             urls: vec![],
             org: None,
+            street: None,
             city: Some(city.to_string()),
             state: Some(state.to_string()),
             country: Some("USA".to_string()),

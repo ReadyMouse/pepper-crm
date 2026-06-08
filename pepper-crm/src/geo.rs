@@ -54,6 +54,15 @@ pub trait Geocoder: Send + Sync {
     }
 }
 
+/// True when coordinates look like a real place (not null island / out of range).
+pub fn is_plausible_geo_point(p: GeoPoint) -> bool {
+    p.lat.is_finite()
+        && p.lng.is_finite()
+        && p.lat.abs() <= 90.0
+        && p.lng.abs() <= 180.0
+        && !(p.lat.abs() < 1e-6 && p.lng.abs() < 1e-6)
+}
+
 /// Great-circle distance in kilometers (Haversine).
 pub fn haversine_km(a: GeoPoint, b: GeoPoint) -> f64 {
     const EARTH_RADIUS_KM: f64 = 6371.0;
@@ -137,7 +146,8 @@ impl FileGeocodeCache {
         Ok(Self::entry_fresh(entry.fetched_at, self.ttl_days))
     }
 
-    fn write_failure(&self, query: &str) -> Result<()> {
+    /// Record a geocode miss (used by Nominatim and tests).
+    pub fn write_failure(&self, query: &str) -> Result<()> {
         std::fs::create_dir_all(&self.fail_dir)?;
         let entry = CachedGeoFailure {
             fetched_at: Utc::now(),

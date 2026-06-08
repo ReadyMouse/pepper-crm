@@ -1,16 +1,16 @@
 # Pepper CRM Core Library
 #
-#   Rust library crate for vCard contact parsing, reconnect tag logic, PostgreSQL sync,
+#   Rust library crate for vCard contact parsing, reconnect tag logic,
 #   calendar travel matching, and geocoding. Consumed by the dashboard and CLI examples.
 #
 # INPUT:
-#   - VCF files (CONTACTS_DIR), PostgreSQL (DATABASE_URL), optional Google Calendar ICS URL.
+#   - VCF files (CONTACTS_DIR), optional Google Calendar ICS URL.
 #
 # OUTPUT:
 #   - `pepper-crm` rlib with public modules re-exported from lib.rs.
 #
 # NOTES:
-#   - Workspace dependencies (sqlx, tokio, serde, etc.) are inherited from the repo root.
+#   - Workspace dependencies (tokio, serde, etc.) are inherited from the repo root.
 #   - Examples: parse_contacts, test_calendar; integration test generates sample VCFs.
 #
 # Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
@@ -22,12 +22,13 @@ edition = "2021"
 
 [dependencies]
 # Workspace dependencies
-sqlx = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
+tzf-rs = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 
@@ -37,6 +38,7 @@ icalendar = "0.16"     # .ics generation
 tera = "1"             # email templating
 lettre = "0.11"        # SMTP sending
 regex = "1"            # tag parsing
+schemars = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 dotenvy = { workspace = true }
 rand = "0.8"

@@ -14,7 +14,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pepper CRM Dashboard</title>
+    <title>Pepper Please Dashboard</title>
     <link rel="stylesheet" href="/static/theme.css">
 </head>
 <body>
@@ -23,7 +23,10 @@
     <div class="page-container">
         <div class="page-intro">
             <div class="date">{{ date }}</div>
-            <p>Your personal CRM command center — synced from VCF contacts and your calendar.</p>
+            <p>Hello Mylo, this is what I found for you this week:</p>
+            {% if contacts_read_only %}
+            <p class="travel-flash travel-flash-info">Contacts sync from your phone. Reconnect and task controls are shown below but disabled until CardDAV write-back is live on the Pi.</p>
+            {% endif %}
         </div>
 
         <div class="stats">
@@ -45,6 +48,21 @@
             </div>
         </div>
 
+        <div class="engagement-guide" aria-label="How contact categories work">
+            <h3 class="engagement-guide-title">Contact categories</h3>
+            <p class="engagement-guide-item">
+                <code>Reconnect: Never</code> is for people you do not need a timed reminder to reach out to
+                (for example best friends, family, or random acquaintances). They can still show up in
+                <strong>Upcoming Birthdays</strong> or <strong>Random People of the Week</strong>, but not in
+                Reconnects Due or travel matches.
+            </p>
+            <p class="engagement-guide-item">
+                <code>Do Not Engage</code> is for contacts you never want Pepper to surface anywhere
+                (for example exes, hookups, or anyone you are keeping in your book for records only).
+                Set this in the contact card <code>CATEGORIES</code> field on your phone.
+            </p>
+        </div>
+
         <div class="section section-travel">
             <div class="section-header">
                 <h2>Next Week Travel</h2>
@@ -52,18 +70,6 @@
                 <span class="badge-live">Updated {{ travel_built_at }}</span>
                 {% endif %}
             </div>
-            <p class="section-desc">
-                Metro-area matching from VCF addresses.
-                Calendar event title is geocoded for each trip.
-                Rebuild once per week or on demand — not on every page load.
-                Contacts with <code>Reconnect: Never</code> are excluded.
-                Only shown if their <code>Reconnect:</code> interval is due (from vCard <code>REV</code>, or latest <code>Month YYYY:</code> note).
-            </p>
-
-            <p class="travel-cache-note">
-                Calendar and contact changes are <strong>not</strong> picked up automatically.
-                Click refresh after you edit Google Calendar or your VCF export.
-            </p>
 
             {% if travel_just_refreshed %}
             <p class="travel-flash travel-flash-ok">Travel list rebuilt from calendar + contacts.</p>
@@ -74,23 +80,6 @@
             {% if travel_refresh_error %}
             <p class="travel-flash travel-flash-err">Refresh failed — check server logs for details.</p>
             {% endif %}
-            {% if geo_just_finished %}
-            <p class="travel-flash travel-flash-ok">GEO pass complete — wrote coordinates for {{ geo_geocoded_count }} contact(s){% if geo_failed_count > 0 %} ({{ geo_failed_count }} failed){% endif %}.</p>
-            {% endif %}
-            {% if geo_refresh_error %}
-            <p class="travel-flash travel-flash-err">GEO pass failed — check server logs for details.</p>
-            {% endif %}
-
-            <p class="travel-geo-meta">
-                Contact GEO: {{ geo_with_coords }}/{{ geo_with_address }} addresses tagged
-                {% if geo_with_address > 0 and geo_with_coords * 100 / geo_with_address < 25 %}
-                — run geocode after a fresh phone export
-                {% endif %}
-            </p>
-
-            <form method="post" action="/contacts/geocode" class="travel-geo-form">
-                <button type="submit" class="btn-geo">Geocode contacts (write GEO to vCards)</button>
-            </form>
 
             <form method="post" action="/travel/refresh" class="travel-refresh-form">
                 <label class="travel-location-label" for="search_location">
@@ -142,13 +131,13 @@
                         </div>
                         <form method="post" action="/travel/snooze" class="travel-snooze-form">
                             <input type="hidden" name="uid" value="{{ match.uid }}">
-                            <select id="snooze-{{ match.uid }}" name="reconnect" class="travel-snooze-select" required aria-label="Snooze interval">
+                            <select id="snooze-{{ match.uid }}" name="reconnect" class="travel-snooze-select" required aria-label="Snooze interval"{% if contacts_read_only %} disabled title="Write-back unlocks with CardDAV on the Pi"{% endif %}>
                                 <option value="" disabled selected>Reconnect…</option>
                                 {% for opt in reconnect_snooze_options %}
                                 <option value="{{ opt.value }}">{{ opt.label }}</option>
                                 {% endfor %}
                             </select>
-                            <button type="submit" class="btn-snooze">Snooze</button>
+                            <button type="submit" class="btn-snooze"{% if contacts_read_only %} disabled title="Write-back unlocks with CardDAV on the Pi"{% endif %}>Snooze</button>
                         </form>
                     </li>
                     {% endfor %}
@@ -169,7 +158,6 @@
             <div class="section-header">
                 <h2>Pending Tasks</h2>
             </div>
-            <p class="section-desc">Open <code>TODO:</code> items from your contact cards (read directly from VCF).</p>
             {% if task_completed %}
             <p class="travel-flash travel-flash-ok">Task removed from contact card.</p>
             {% endif %}
@@ -184,7 +172,7 @@
                 <form method="post" action="/tasks/complete" class="task-complete-form">
                     <input type="hidden" name="uid" value="{{ task.uid }}">
                     <input type="hidden" name="description" value="{{ task.description }}">
-                    <button type="submit" class="btn-snooze">Done</button>
+                    <button type="submit" class="btn-snooze"{% if contacts_read_only %} disabled title="Write-back unlocks with CardDAV on the Pi"{% endif %}>Done</button>
                 </form>
             </div>
             {% endfor %}
@@ -200,10 +188,6 @@
             <div class="section-header">
                 <h2>Reconnects Due</h2>
             </div>
-            <p class="section-desc">
-                Timed <code>Reconnect:</code> intervals due on or before the next {{ reconnect_window_days }} days
-                (anchor: vCard <code>REV</code>, or latest <code>Month YYYY:</code> note).
-            </p>
             {% if reconnect_snoozed %}
             <p class="travel-flash travel-flash-ok">Reconnect interval updated on contact card.</p>
             {% endif %}
@@ -216,13 +200,13 @@
                 </div>
                 <form method="post" action="/travel/snooze" class="travel-snooze-form">
                     <input type="hidden" name="uid" value="{{ reconnect.uid }}">
-                    <select id="snooze-reconnect-{{ reconnect.uid }}" name="reconnect" class="travel-snooze-select" required aria-label="Snooze interval">
+                    <select id="snooze-reconnect-{{ reconnect.uid }}" name="reconnect" class="travel-snooze-select" required aria-label="Snooze interval"{% if contacts_read_only %} disabled title="Write-back unlocks with CardDAV on the Pi"{% endif %}>
                         <option value="" disabled selected>Reconnect…</option>
                         {% for opt in reconnect_snooze_options %}
                         <option value="{{ opt.value }}">{{ opt.label }}</option>
                         {% endfor %}
                     </select>
-                    <button type="submit" class="btn-snooze">Snooze</button>
+                    <button type="submit" class="btn-snooze"{% if contacts_read_only %} disabled title="Write-back unlocks with CardDAV on the Pi"{% endif %}>Snooze</button>
                 </form>
             </div>
             {% endfor %}
@@ -247,16 +231,6 @@
             {% if random_category_saved %}
             <p class="travel-flash travel-flash-ok">Contact categories updated on vCard.</p>
             {% endif %}
-            <p class="section-desc">
-                Three contacts picked at random for the week of {{ random_week_label }} — a nudge to remember people
-                and fill in missing details. Use the Reconnect dropdown to write <code>CATEGORIES</code> on the vCard.
-                Excludes <code>Venue/Business</code> and <code>Do Not Engage</code>; <code>Reconnect: Never</code> is eligible.
-                {% if random_shuffled %}
-                You shuffled this week’s list — click <strong>Shuffle 3 new</strong> again for another draw, or wait until Monday for the default weekly set.
-                {% else %}
-                Default picks stay the same until next Monday; use shuffle anytime for a fresh trio.
-                {% endif %}
-            </p>
             {% if random_pick_count > 0 %}
             <ul class="random-pick-list" id="random-pick-list">
                 {% for pick in random_picks %}
@@ -295,13 +269,13 @@
                     </div>
                     <form method="post" action="/random/category" class="random-pick-category-form travel-snooze-form">
                         <input type="hidden" name="uid" value="{{ pick.uid }}">
-                        <select id="random-reconnect-{{ pick.uid }}" name="reconnect" class="travel-snooze-select" required aria-label="Snooze interval">
+                        <select id="random-reconnect-{{ pick.uid }}" name="reconnect" class="travel-snooze-select" required aria-label="Snooze interval"{% if contacts_read_only %} disabled title="Write-back unlocks with CardDAV on the Pi"{% endif %}>
                             <option value="" disabled selected>Reconnect…</option>
                             {% for opt in random_pick_category_options %}
                             <option value="{{ opt.value }}">{{ opt.label }}</option>
                             {% endfor %}
                         </select>
-                        <button type="submit" class="btn-snooze">Snooze</button>
+                        <button type="submit" class="btn-snooze"{% if contacts_read_only %} disabled title="Write-back unlocks with CardDAV on the Pi"{% endif %}>Snooze</button>
                     </form>
                 </li>
                 {% endfor %}
@@ -321,11 +295,6 @@
             <div class="section-header">
                 <h2>Upcoming Birthdays</h2>
             </div>
-            <p class="section-desc">
-                Birthdays in the next {{ birthday_window_days }} days from vCard <code>BDAY</code>
-                (e.g. <code>1990-05-21</code> or <code>--0521</code>).
-                Excludes <code>Do Not Engage</code>; includes <code>Reconnect: Never</code>.
-            </p>
             {% if birthday_count > 0 %}
             {% for bday in birthdays %}
             <div class="list-item list-item-row">
@@ -344,6 +313,88 @@
             {% else %}
             <div class="empty-state">
                 <p>No birthdays in the next {{ birthday_window_days }} days. Add <code>BDAY</code> to contact cards to see them here.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>Data Enrichment</h2>
+            </div>
+            {% if enrichment_location_saved and enrichment_geo_ok %}
+            <p class="travel-flash travel-flash-ok">Location and coordinates saved — showing the next contact who needs a fix.</p>
+            {% elif enrichment_location_saved and enrichment_geo_failed %}
+            <p class="travel-flash travel-flash-err">Location saved but geocoding failed — try a clearer street, city, and state. This contact stays in the list until coordinates resolve.</p>
+            {% endif %}
+            {% if enrichment_pick_count > 0 %}
+            <ul class="enrichment-pick-list">
+                {% for pick in enrichment_picks %}
+                <li class="enrichment-pick-card">
+                    <div class="enrichment-pick-name">{{ pick.contact_name }}</div>
+                    <div class="enrichment-pick-meta">
+                        {% if pick.org != "" %}
+                        <span>{{ pick.org }}</span>
+                        {% endif %}
+                        {% if pick.location_hint != "" %}
+                        <span>On card: {{ pick.location_hint }}</span>
+                        {% endif %}
+                    </div>
+                    <p class="enrichment-pick-issue">{{ pick.issue_label }}</p>
+                    <form method="post" action="/contacts/location" class="enrichment-location-form">
+                        <input type="hidden" name="uid" value="{{ pick.uid }}">
+                        <label class="enrichment-field-label enrichment-field-street" for="enrichment-street-{{ pick.uid }}">
+                            Street <span class="enrichment-optional">(optional)</span>
+                            <input
+                                type="text"
+                                id="enrichment-street-{{ pick.uid }}"
+                                name="street"
+                                class="enrichment-location-input enrichment-location-input-wide"
+                                value="{{ pick.street }}"
+                                placeholder="e.g. 123 Main St"
+                                {% if contacts_read_only %}readonly{% endif %}
+                            />
+                        </label>
+                        <label class="enrichment-field-label" for="enrichment-city-{{ pick.uid }}">
+                            City
+                            <input
+                                type="text"
+                                id="enrichment-city-{{ pick.uid }}"
+                                name="city"
+                                class="enrichment-location-input"
+                                value="{{ pick.city }}"
+                                placeholder="e.g. Chicago"
+                                required
+                                {% if contacts_read_only %}readonly{% endif %}
+                            />
+                        </label>
+                        <label class="enrichment-field-label" for="enrichment-state-{{ pick.uid }}">
+                            State
+                            <input
+                                type="text"
+                                id="enrichment-state-{{ pick.uid }}"
+                                name="state"
+                                class="enrichment-location-input"
+                                value="{{ pick.state }}"
+                                placeholder="e.g. IL"
+                                {% if contacts_read_only %}readonly{% endif %}
+                            />
+                        </label>
+                        {% if not contacts_read_only %}
+                        <button type="submit" class="btn-snooze">Save location</button>
+                        {% else %}
+                        <button type="submit" class="btn-snooze" disabled title="Write-back unlocks with CardDAV on the Pi">Save location</button>
+                        {% endif %}
+                    </form>
+                </li>
+                {% endfor %}
+            </ul>
+            <p class="enrichment-pick-footnote">
+                {{ enrichment_eligible_count }} contact{% if enrichment_eligible_count != 1 %}s{% endif %} need location data
+                {% if enrichment_fewer_than_target %} (showing {{ enrichment_pick_count }} — fewer than {{ enrichment_pick_target }} in your book){% endif %}.
+            </p>
+            {% else %}
+            <div class="empty-state">
+                <p>All contacts have addresses and GEO. Travel matching can use your location data.</p>
             </div>
             {% endif %}
         </div>

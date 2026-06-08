@@ -18,6 +18,17 @@ CLI binary that runs the full weekly CRM flow by spawning MCP servers over stdio
 - `--force-travel` — rebuild travel snapshot
 - `--contacts-dir` — VCF directory override
 
+## Scheduled run (cron)
+
+Production schedule: **Monday 06:00** in your **trip timezone** (from `GOOGLE_CALENDAR_ICS_URL`), default **US Eastern**. Hourly cron runs `pepper --send-if-due`.
+
+```bash
+./pepper --schedule-status          # monday, timezone, send_window_active
+./scripts/install-weekly-cron.sh    # hourly crontab → run-weekly-digest.sh
+```
+
+See [README — Weekly digest cron](../README.md#weekly-digest-cron-monday-600-trip-timezone).
+
 ## Open-source candidate
 
-**Yes.** Thin orchestrator; all logic lives in `pepper-crm` and MCP server crates. Requires locally built MCP server binaries in `./target/debug/`.
+**Yes.** Thin orchestrator; logic lives in `pepper-crm`. MCP server binaries are optional for agent workflows; the weekly CLI calls the library directly.

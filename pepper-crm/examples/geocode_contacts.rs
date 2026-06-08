@@ -1,8 +1,18 @@
-//! Geocode all contacts in CONTACTS_DIR and write GEO + X-PEPPER-GEO-SOURCE back to vCards.
+//! # Batch Geocode Contacts Example
 //!
-//! Run: `cargo run -p pepper-crm --example geocode_contacts`
+//!   Geocodes every contact in `CONTACTS_DIR` and writes GEO + X-PEPPER-GEO-SOURCE back to vCards.
 //!
-//! Expect ~1 Nominatim request per address (~1/sec). A 900-contact export takes ~15 minutes.
+//! INPUT:
+//!   - `CONTACTS_DIR`, `CACHE_DIR`, optional `GEO_WRITE_TO_VCF` from `.env`.
+//!
+//! OUTPUT:
+//!   - Updated vCard files with lat/lng; stdout coverage summary.
+//!
+//! NOTES:
+//!   - Run: `cargo run -p pepper-crm --example geocode_contacts`
+//!   - ~1 Nominatim request per address (~1/sec); large exports take many minutes.
+//!
+//! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 use anyhow::Result;
 use pepper_crm::{ensure_contacts_geocoded_in_dir, geo_coverage};

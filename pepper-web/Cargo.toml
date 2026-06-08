@@ -3,7 +3,7 @@
 #   Package definition for the localhost web dashboard binary.
 #
 # INPUT: None (Cargo manifest).
-# OUTPUT: `pepper-web` binary depending on pepper-crm, Axum, Tera, SQLx, and workspace crates.
+# OUTPUT: `pepper-web` binary depending on pepper-crm, Axum, Tera, and workspace crates.
 # NOTES: Run with `cargo run --bin pepper-web` from repo root; serves on 127.0.0.1:3000.
 #
 # Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.

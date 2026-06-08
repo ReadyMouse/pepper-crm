@@ -47,6 +47,8 @@ Desktop.ini
 
 # Logs
 *.log
+# VirtualBox dumps these in CWD when Vagrant runs from the repo (harmless; delete anytime)
+*VBoxHeadless*.log
 
 # Travel / geocode caches (weekly snapshots, not committed)
 .cache/

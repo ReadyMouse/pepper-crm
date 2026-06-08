@@ -48,6 +48,29 @@ pub fn contacts_use_carddav() -> bool {
     CardDavConfig::from_env().is_some()
 }
 
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|s| {
+            let lower = s.to_lowercase();
+            lower == "1" || lower == "true" || lower == "yes"
+        })
+        .unwrap_or(false)
+}
+
+/// True when `CONTACTS_READ_ONLY` is set — local VCF and CardDAV writes are blocked.
+pub fn contacts_read_only() -> bool {
+    env_flag("CONTACTS_READ_ONLY")
+}
+
+fn ensure_contacts_writable() -> Result<()> {
+    if contacts_read_only() {
+        anyhow::bail!(
+            "contacts are read-only (CONTACTS_READ_ONLY); edit on your phone or disable read-only mode"
+        );
+    }
+    Ok(())
+}
+
 fn contact_storage_label(contact: &Contact) -> String {
     contact
         .carddav_href
@@ -68,6 +91,7 @@ fn read_contact_vcf_content(contact: &Contact) -> Result<String> {
 }
 
 fn write_contact_vcf_content(contact: &Contact, content: &str) -> Result<()> {
+    ensure_contacts_writable()?;
     if contacts_use_carddav() {
         let client = carddav_client().context("CardDAV client not initialized")?;
         let put_target = client.put_url_for_contact(
@@ -131,23 +155,41 @@ fn parse_vcards_from_carddav(client: &CardDavClient) -> Result<Vec<Contact>> {
     Ok(contacts)
 }
 
-/// Parse all VCF files in a directory (each file may contain multiple `BEGIN:VCARD` blocks).
-pub fn parse_vcards_from_dir(dir: &Path) -> Result<Vec<Contact>> {
-    let mut contacts = Vec::new();
-
+fn collect_vcf_paths(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     let entries = fs::read_dir(dir)
         .with_context(|| format!("Failed to read directory: {}", dir.display()))?;
 
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
 
-        if path.extension().and_then(|s| s.to_str()) == Some("vcf") {
-            match parse_vcards_from_path(&path) {
-                Ok(mut from_file) => contacts.append(&mut from_file),
-                Err(e) => {
-                    warn!("Failed to parse {}: {}", path.display(), e);
-                }
+        if path.is_dir() {
+            if name.starts_with('.') {
+                continue;
+            }
+            collect_vcf_paths(&path, out)?;
+        } else if path.extension().and_then(|s| s.to_str()) == Some("vcf") {
+            out.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse all VCF files under `dir` (recursive; skips hidden directories like `.stversions`).
+pub fn parse_vcards_from_dir(dir: &Path) -> Result<Vec<Contact>> {
+    let mut contacts = Vec::new();
+    let mut vcf_paths = Vec::new();
+    collect_vcf_paths(dir, &mut vcf_paths)?;
+    vcf_paths.sort();
+
+    for path in vcf_paths {
+        match parse_vcards_from_path(&path) {
+            Ok(mut from_file) => contacts.append(&mut from_file),
+            Err(e) => {
+                warn!("Failed to parse {}: {}", path.display(), e);
             }
         }
     }
@@ -261,6 +303,7 @@ fn parse_vcard_content_with_index(
     let mut phone = None;
     let mut urls: Vec<String> = Vec::new();
     let mut org = None;
+    let mut street = None;
     let mut city = None;
     let mut state = None;
     let mut country = None;
@@ -311,7 +354,7 @@ fn parse_vcard_content_with_index(
                 note_raw = normalize_note_field(&value);
             } else if key.starts_with("ADR") {
                 let adr_value = normalize_adr_field_value(&value);
-                apply_adr_value(&adr_value, &mut city, &mut state, &mut country);
+                apply_adr_value(&adr_value, &mut street, &mut city, &mut state, &mut country);
             } else if key.starts_with("GEO") {
                 if let Some(p) = parse_geo_value(&value) {
                     geo = Some(p);
@@ -357,6 +400,7 @@ fn parse_vcard_content_with_index(
         phone,
         urls,
         org,
+        street,
         city,
         state,
         country,
@@ -462,6 +506,11 @@ pub fn contact_address_query(contact: &Contact) -> Option<String> {
 
 /// Ordered geocode queries for a contact (best first, fallbacks after).
 pub fn geocode_queries_for_contact(contact: &Contact) -> Vec<String> {
+    let street_raw = contact
+        .street
+        .as_deref()
+        .map(clean_location_token)
+        .filter(|s| !s.is_empty());
     let city_raw = contact
         .city
         .as_deref()
@@ -483,6 +532,13 @@ pub fn geocode_queries_for_contact(contact: &Contact) -> Vec<String> {
     };
 
     let mut queries = Vec::new();
+
+    if let Some(street) = street_raw {
+        if let Some(st) = &state_raw {
+            push_unique_query(&mut queries, format!("{street}, {city}, {st}"));
+        }
+        push_unique_query(&mut queries, format!("{street}, {city}"));
+    }
 
     if city.contains(',') {
         if let Some(q) = city_state_query_from_comma_address(&city) {
@@ -736,11 +792,17 @@ fn join_vcard_blocks(blocks: &[String]) -> String {
 }
 
 /// Parse ADR semicolon fields; tolerate Google exports (full address in street/city slots).
-fn apply_adr_value(value: &str, city: &mut Option<String>, state: &mut Option<String>, country: &mut Option<String>) {
+fn apply_adr_value(
+    value: &str,
+    street_out: &mut Option<String>,
+    city: &mut Option<String>,
+    state: &mut Option<String>,
+    country: &mut Option<String>,
+) {
     let parts: Vec<&str> = value.split(';').collect();
     let trimmed: Vec<&str> = parts.iter().map(|p| p.trim()).collect();
 
-    let street = trimmed.get(2).filter(|s| !s.is_empty());
+    let street_part = trimmed.get(2).filter(|s| !s.is_empty());
     let locality = trimmed.get(3).filter(|s| !s.is_empty());
     let region = trimmed.get(4).filter(|s| !s.is_empty());
     let nation = trimmed.get(6).filter(|s| !s.is_empty());
@@ -748,7 +810,13 @@ fn apply_adr_value(value: &str, city: &mut Option<String>, state: &mut Option<St
     // Prefer city component; fall back to street (Google often puts full address in part 2).
     if let Some(c) = locality {
         *city = Some(clean_location_token(c));
-    } else if let Some(s) = street {
+        if let Some(s) = street_part {
+            let street_clean = clean_location_token(s);
+            if !street_clean.eq_ignore_ascii_case(c) {
+                *street_out = Some(street_clean);
+            }
+        }
+    } else if let Some(s) = street_part {
         let street_clean = clean_location_token(s);
         if let Some((c, st, ctry)) = extract_city_state_from_comma_address(&street_clean) {
             *city = Some(c);
@@ -968,7 +1036,12 @@ pub fn complete_task(contact: &Contact, todo_body: &str) -> Result<()> {
     if updated_note == contact.note_raw {
         anyhow::bail!("TODO not found on contact");
     }
-    set_contact_note(contact, &updated_note)
+    let note = if updated_note.trim().is_empty() {
+        "."
+    } else {
+        updated_note.trim()
+    };
+    set_contact_note(contact, note)
 }
 
 /// Replace the vCard `NOTE` field (used when enriching a contact from the dashboard).
@@ -1017,13 +1090,19 @@ pub fn set_contact_note(contact: &Contact, note: &str) -> Result<()> {
     Ok(())
 }
 
-/// Set city/state on the vCard `ADR` field; clears stale `GEO` so travel can re-geocode.
-pub fn set_contact_location(contact: &Contact, city: &str, state: Option<&str>) -> Result<()> {
+/// Set street/city/state on the vCard `ADR` field; clears stale `GEO` so travel can re-geocode.
+pub fn set_contact_location(
+    contact: &Contact,
+    city: &str,
+    state: Option<&str>,
+    street: Option<&str>,
+) -> Result<()> {
     let city = city.trim();
     if city.is_empty() {
         anyhow::bail!("City is required");
     }
     let state = state.map(str::trim).filter(|s| !s.is_empty());
+    let street = street.map(str::trim).filter(|s| !s.is_empty());
 
     let content = read_contact_vcf_content(contact)?;
 
@@ -1037,7 +1116,7 @@ pub fn set_contact_location(contact: &Contact, city: &str, state: Option<&str>) 
                 return block;
             }
             found = true;
-            upsert_adr_in_block(&block, city, state)
+            upsert_adr_in_block(&block, street, city, state)
         })
         .collect();
 
@@ -1104,16 +1183,19 @@ fn adr_line_key_from_block(block: &str) -> String {
     "ADR;TYPE=HOME".to_string()
 }
 
-fn format_adr_value(city: &str, state: Option<&str>) -> String {
-    match state {
-        Some(st) => format!(";;;{city};{st};;"),
-        None => format!(";;;{city};;;"),
+fn format_adr_value(street: Option<&str>, city: &str, state: Option<&str>) -> String {
+    let street = street.map(str::trim).filter(|s| !s.is_empty());
+    match (street, state) {
+        (Some(street), Some(st)) => format!(";;{street};{city};{st};;"),
+        (Some(street), None) => format!(";;{street};{city};;;"),
+        (None, Some(st)) => format!(";;;{city};{st};;"),
+        (None, None) => format!(";;;{city};;;"),
     }
 }
 
-fn upsert_adr_in_block(block: &str, city: &str, state: Option<&str>) -> String {
+fn upsert_adr_in_block(block: &str, street: Option<&str>, city: &str, state: Option<&str>) -> String {
     let adr_key = adr_line_key_from_block(block);
-    let adr_value = format_adr_value(city, state);
+    let adr_value = format_adr_value(street, city, state);
     let unfolded = unfold_vcard_lines(block);
     let mut out = String::new();
     let mut adr_done = false;
@@ -1602,7 +1684,7 @@ END:VCARD"#;
         assert!(contact.city.is_none());
 
         set_contact_note(&contact, "Met at a meetup. Works on robotics.").unwrap();
-        set_contact_location(&contact, "Portland", Some("OR")).unwrap();
+        set_contact_location(&contact, "Portland", Some("OR"), None).unwrap();
 
         let updated = parse_vcards_from_path(&path).unwrap().remove(0);
         assert!(updated.note_raw.contains("Met at a meetup"));
@@ -1612,6 +1694,32 @@ END:VCARD"#;
         let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.contains("NOTE:Met at a meetup"));
         assert!(raw.contains("ADR;TYPE=HOME:;;;Portland;OR;;"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_parse_vcards_from_dir_recursive() {
+        let dir = std::env::temp_dir().join("pepper_vcf_nested_test");
+        let _ = fs::remove_dir_all(&dir);
+        let nested = dir.join("sync-folder");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(dir.join(".stversions")).unwrap();
+        fs::write(
+            nested.join("a.vcf"),
+            "BEGIN:VCARD\nUID:n1\nFN:Nested One\nEND:VCARD\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("root.vcf"),
+            "BEGIN:VCARD\nUID:n2\nFN:Root Two\nEND:VCARD\n",
+        )
+        .unwrap();
+
+        let contacts = parse_vcards_from_dir(&dir).unwrap();
+        assert_eq!(contacts.len(), 2);
+        let names: Vec<_> = contacts.iter().map(|c| c.full_name.as_str()).collect();
+        assert!(names.contains(&"Nested One"));
+        assert!(names.contains(&"Root Two"));
         let _ = fs::remove_dir_all(&dir);
     }
 }

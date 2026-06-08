@@ -1,6 +1,18 @@
-//! # Pending tasks from vCards
+//! # Pending Tasks from vCards
 //!
-//!   Lists and completes `TODO:` items stored in contact NOTE fields (no PostgreSQL).
+//!   Lists and completes `TODO:` items stored in contact NOTE fields.
+//!
+//! INPUT:
+//!   - Parsed `Contact` slice with `todos` extracted from NOTE lines.
+//!   - Contact UID, task text, and NOTE body for completion write-back.
+//!
+//! OUTPUT:
+//!   - `PendingTaskInfo` rows for dashboard and digest.
+//!   - Updated NOTE with a single TODO line removed on completion.
+//!
+//! NOTES:
+//!   - Excludes `Do Not Engage` contacts.
+//!   - Task state lives entirely in vCard NOTE fields.
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
@@ -66,6 +78,12 @@ mod tests {
     }
 
     #[test]
+    fn remove_last_todo_can_leave_empty_note() {
+        let updated = remove_todo_from_note("TODO: only task", "only task");
+        assert!(updated.trim().is_empty());
+    }
+
+    #[test]
     fn pending_tasks_skips_do_not_engage() {
         let contacts = vec![Contact {
             uid: "a".into(),
@@ -74,6 +92,7 @@ mod tests {
             phone: None,
             urls: vec![],
             org: None,
+            street: None,
             city: None,
             state: None,
             country: None,

@@ -126,6 +126,30 @@ pub fn trips_for_next_week(ics: &str, as_of: NaiveDate) -> Result<Vec<TravelTrip
     Ok(trips)
 }
 
+/// Trips whose date range includes `day` (calendar all-day events; SUMMARY = destination).
+pub fn trips_on_date(ics: &str, day: NaiveDate) -> Result<Vec<TravelTrip>> {
+    let events = parse_ics_events(ics)?;
+    let mut trips = Vec::new();
+
+    for ev in events {
+        if !ranges_overlap(ev.start, ev.end, day, day) {
+            continue;
+        }
+        let title = ev.summary.trim();
+        if title.is_empty() {
+            continue;
+        }
+        trips.push(TravelTrip {
+            title: title.to_string(),
+            start: ev.start,
+            end: ev.end,
+        });
+    }
+
+    trips.sort_by(|a, b| a.start.cmp(&b.start).then(a.title.cmp(&b.title)));
+    Ok(trips)
+}
+
 fn ranges_overlap(a_start: NaiveDate, a_end: NaiveDate, b_start: NaiveDate, b_end: NaiveDate) -> bool {
     a_start <= b_end && a_end >= b_start
 }
@@ -202,5 +226,16 @@ mod tests {
         let trips = trips_for_next_week(ics, as_of).unwrap();
         assert_eq!(trips.len(), 1);
         assert_eq!(trips[0].title, "Chicago, IL");
+    }
+
+    #[test]
+    fn test_trips_on_date() {
+        let ics = include_str!("../tests/fixtures/travel_calendar.ics");
+        let monday = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+        let trips = trips_on_date(ics, monday).unwrap();
+        assert_eq!(trips.len(), 1);
+        assert_eq!(trips[0].title, "Chicago, IL");
+        let home = NaiveDate::from_ymd_opt(2026, 5, 19).unwrap();
+        assert!(trips_on_date(ics, home).unwrap().is_empty());
     }
 }

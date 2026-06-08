@@ -15,37 +15,70 @@
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
-use anyhow::Result;
-use pepper_crm::{render_digest_email, DigestInput};
-use rmcp::*;
+use pepper_crm::{render_digest_email, DigestInput, DigestOutput};
+use rmcp::{
+    ServerHandler, ServiceExt,
+    handler::server::{router::tool::ToolRouter, wrapper::{Json, Parameters}},
+    model::{ServerCapabilities, ServerInfo},
+    tool, tool_handler, tool_router,
+    transport::stdio,
+};
 use tracing::info;
 
-async fn handle_render_digest(args: DigestInput) -> Result<pepper_crm::DigestOutput> {
-    info!(
-        "Rendering digest with {} tasks, {} reconnects, {} travel matches, {} birthdays, {} random picks",
-        args.task_count(),
-        args.reconnect_count(),
-        args.travel_match_count,
-        args.birthday_count(),
-        args.random_pick_count()
-    );
+#[derive(Clone)]
+struct DigestServer {
+    tool_router: ToolRouter<Self>,
+}
 
-    render_digest_email(&args)
+impl DigestServer {
+    fn new() -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+        }
+    }
+}
+
+#[tool_router]
+impl DigestServer {
+    #[tool(
+        description = "Render HTML email digest from tasks, reconnects, travel, birthdays, and random picks"
+    )]
+    fn render_digest(
+        &self,
+        Parameters(input): Parameters<DigestInput>,
+    ) -> Result<Json<DigestOutput>, String> {
+        info!(
+            "Rendering digest with {} tasks, {} reconnects, {} travel matches, {} birthdays, {} random picks",
+            input.task_count(),
+            input.reconnect_count(),
+            input.travel_match_count,
+            input.birthday_count(),
+            input.random_pick_count()
+        );
+
+        render_digest_email(&input).map(Json).map_err(|e| e.to_string())
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for DigestServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            instructions: Some(
+                "Render the Pepper weekly CRM digest email from a DigestInput payload.".into(),
+            ),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            ..Default::default()
+        }
+    }
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     info!("Starting mcp-digest-server");
-
-    let server = Server::new("mcp-digest-server").with_tool(
-        "render_digest",
-        "Render HTML email digest from tasks, reconnects, travel, birthdays, and random picks",
-        |args: DigestInput| async move { handle_render_digest(args).await },
-    );
-
-    server.run_stdio().await?;
-
+    let service = DigestServer::new().serve(stdio()).await?;
+    service.waiting().await?;
     Ok(())
 }
