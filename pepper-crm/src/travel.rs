@@ -108,13 +108,8 @@ pub async fn build_travel_week_snapshot(config: &TravelBuildConfig) -> Result<Tr
 
 /// Sync entry point (CLI / tests outside a runtime). Prefer [`build_travel_week_snapshot`].
 pub fn build_travel_week_snapshot_blocking(config: &TravelBuildConfig) -> Result<TravelWeekSnapshot> {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(|| handle.block_on(build_travel_week_snapshot(config)))
-    } else {
-        tokio::runtime::Runtime::new()
-            .context("tokio runtime for travel build")?
-            .block_on(build_travel_week_snapshot(config))
-    }
+    let config = config.clone();
+    crate::geo::run_on_helper_thread(async move { build_travel_week_snapshot(&config).await })
 }
 
 async fn build_travel_week_snapshot_async(
@@ -135,7 +130,8 @@ async fn build_travel_week_snapshot_async(
 
     let ics = resolve_ics_content_async(config).await?;
     let trips = resolve_trips_for_build(config, &ics)?;
-    let mut contacts = parse_contacts(&config.contacts_dir)?;
+    let contacts_dir = config.contacts_dir.clone();
+    let mut contacts = crate::vcard::parse_contacts_async(contacts_dir).await?;
     let run_geo_ensure = config.ensure_contact_geo || should_ensure_contact_geo(&contacts);
     if run_geo_ensure && !config.ensure_contact_geo {
         info!(
@@ -320,7 +316,8 @@ async fn match_contacts_for_trip_async(
         if contact_address_query(contact).is_none() {
             continue;
         }
-        let contact_point = match resolve_contact_point(contact, geocoder, ensure_contact_geo) {
+        let contact_point = match resolve_contact_point_async(contact, geocoder, ensure_contact_geo).await
+        {
             Ok(p) => p,
             Err(_) => continue,
         };
@@ -334,6 +331,29 @@ async fn match_contacts_for_trip_async(
 
     sort_travel_matches(&mut candidates);
     Ok(candidates)
+}
+
+async fn resolve_contact_point_async(
+    contact: &Contact,
+    geocoder: &NominatimGeocoder,
+    ensure_contact_geo: bool,
+) -> Result<GeoPoint> {
+    if let Some(p) = contact.geo {
+        if !ensure_contact_geo || !needs_geocoding(contact) {
+            return Ok(p);
+        }
+    }
+    if !ensure_contact_geo {
+        anyhow::bail!("no cached GEO for contact");
+    }
+    let queries = geocode_queries_for_contact(contact);
+    if queries.is_empty() {
+        anyhow::bail!("no address for contact");
+    }
+    geocoder
+        .geocode_queries_async(&queries)
+        .await
+        .map(|(point, _)| point)
 }
 
 fn match_contacts_for_trip<G: Geocoder>(

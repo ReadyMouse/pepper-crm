@@ -48,7 +48,7 @@ CATEGORIES:Reconnect: Never
 CATEGORIES:Do Not Engage
 ```
 
-Full rules: [`README.md` — Engagement categories](README.md#engagement-categories-in-categories).
+Full rules: [`README_technical.md` — Engagement categories](../README_technical.md#engagement-categories).
 
 ## Open-source candidate
 

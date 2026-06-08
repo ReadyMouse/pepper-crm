@@ -7,7 +7,7 @@
 //!   - VCF file paths or raw vCard strings; `Contact` values for write-back operations.
 //!
 //! OUTPUT:
-//!   - `Contact` structs; updated VCF files on disk (`GEO`, `NOTE`, reconnect snooze).
+//!   - `Contact` structs; updated VCF files on disk (`GEO`, `NOTE`, `CATEGORIES`, `REV`).
 //!
 //! NOTES:
 //!   - When `CARDDAV_*` env vars are set, contacts load via CardDAV REPORT and write via PUT.
@@ -119,6 +119,24 @@ pub fn parse_contacts(contacts_dir: &Path) -> Result<Vec<Contact>> {
         return parse_vcards_from_carddav(client);
     }
     parse_vcards_from_dir(contacts_dir)
+}
+
+/// [`parse_contacts`] off the tokio runtime (CardDAV uses `reqwest::blocking`).
+pub async fn parse_contacts_async(contacts_dir: PathBuf) -> Result<Vec<Contact>> {
+    tokio::task::spawn_blocking(move || parse_contacts(&contacts_dir))
+        .await
+        .context("contacts parse task join failed")?
+}
+
+/// Run blocking VCF/CardDAV I/O off the async runtime (writes and reads).
+pub async fn run_contacts_io<F, T>(f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .context("contacts I/O task join failed")?
 }
 
 fn parse_vcards_from_carddav(client: &CardDavClient) -> Result<Vec<Contact>> {
@@ -644,9 +662,12 @@ fn parse_state_token(s: &str) -> Option<String> {
 }
 
 fn parse_geo_value(value: &str) -> Option<GeoPoint> {
-    let value = value.trim();
+    let value = value
+        .trim()
+        .replace("\\;", ";")
+        .replace("\\,", ",");
     // vCard 3: GEO:lat;lng — vCard 4 may use geo:lat,lng prefix; strip optional "geo:"
-    let coords = value.strip_prefix("geo:").unwrap_or(value);
+    let coords = value.strip_prefix("geo:").unwrap_or(&value);
     let sep = if coords.contains(';') { ';' } else { ',' };
     let mut parts = coords.split(sep);
     let lat: f64 = parts.next()?.trim().parse().ok()?;
@@ -981,14 +1002,9 @@ pub fn set_random_pick_category(contact: &Contact, choice: &str, as_of: NaiveDat
     }
 }
 
-/// Set `Reconnect: …`, update `REV` (reconnect anchor), and stamp NOTE.
-pub fn set_reconnect_snooze(contact: &Contact, reconnect_body: &str, as_of: NaiveDate) -> Result<()> {
+/// Set `Reconnect: …` in `CATEGORIES` and refresh `REV` as the snooze anchor.
+pub fn set_reconnect_snooze(contact: &Contact, reconnect_body: &str, _as_of: NaiveDate) -> Result<()> {
     let rev_stamp = format_rev_timestamp(Utc::now());
-    let stamp = format!(
-        "{}: Updated reconnect time.",
-        format_month_year_note_prefix(as_of)
-    );
-    let updated_note = prepend_note_line(&contact.note_raw, &stamp);
     let updated_categories = upsert_reconnect_categories(&contact.categories, reconnect_body);
 
     let content = read_contact_vcf_content(contact)?;
@@ -1003,7 +1019,7 @@ pub fn set_reconnect_snooze(contact: &Contact, reconnect_body: &str, as_of: Naiv
                 return block;
             }
             found = true;
-            upsert_reconnect_in_block(&block, &updated_note, &updated_categories, &rev_stamp)
+            upsert_reconnect_in_block(&block, &updated_categories, &rev_stamp, None)
         })
         .collect();
 
@@ -1154,14 +1170,14 @@ fn upsert_note_in_block(block: &str, new_note: &str) -> String {
         }
         if line_starts_with_property(line, "NOTE") {
             if !note_done {
-                out.push_str(&format!("NOTE:{new_note}\n"));
+                out.push_str(&format_note_property(new_note));
                 note_done = true;
             }
             continue;
         }
         if line.trim() == "END:VCARD" {
             if !note_done {
-                out.push_str(&format!("NOTE:{new_note}\n"));
+                out.push_str(&format_note_property(new_note));
                 note_done = true;
             }
             out.push_str("END:VCARD\n");
@@ -1239,6 +1255,24 @@ fn prepend_note_line(note: &str, line: &str) -> String {
     }
 }
 
+/// Emit a `NOTE` property with RFC 2425 line folding for embedded newlines.
+fn format_note_property(note: &str) -> String {
+    let trimmed = note.trim();
+    if trimmed.is_empty() || trimmed == "." {
+        return "NOTE:.\n".to_string();
+    }
+    let mut lines = trimmed.lines();
+    let first = lines.next().unwrap_or(".");
+    let mut out = format!("NOTE:{first}\n");
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        out.push_str(&format!(" {line}\n"));
+    }
+    out
+}
+
 fn upsert_reconnect_categories(categories: &[String], reconnect_body: &str) -> Vec<String> {
     let mut out: Vec<String> = categories
         .iter()
@@ -1288,7 +1322,7 @@ fn set_do_not_engage(contact: &Contact, as_of: NaiveDate) -> Result<()> {
                 return block;
             }
             found = true;
-            upsert_reconnect_in_block(&block, &updated_note, &updated_categories, &rev_stamp)
+            upsert_reconnect_in_block(&block, &updated_categories, &rev_stamp, Some(&updated_note))
         })
         .collect();
 
@@ -1317,9 +1351,9 @@ fn set_do_not_engage(contact: &Contact, as_of: NaiveDate) -> Result<()> {
 
 fn upsert_reconnect_in_block(
     block: &str,
-    new_note: &str,
     categories: &[String],
     rev_value: &str,
+    note_override: Option<&str>,
 ) -> String {
     let categories_value = categories.join(",");
     let unfolded = unfold_vcard_lines(block);
@@ -1335,10 +1369,16 @@ fn upsert_reconnect_in_block(
             continue;
         }
         if line_starts_with_property(line, "NOTE") {
-            if !note_done {
-                out.push_str(&format!("NOTE:{new_note}\n"));
-                note_done = true;
+            if let Some(new_note) = note_override {
+                if !note_done {
+                    out.push_str(&format_note_property(new_note));
+                    note_done = true;
+                }
+                continue;
             }
+            note_done = true;
+            out.push_str(line);
+            out.push('\n');
             continue;
         }
         if line_starts_with_property(line, "CATEGORIES") || line_starts_with_property(line, "CATEGORY")
@@ -1354,9 +1394,11 @@ fn upsert_reconnect_in_block(
                 out.push_str(&format!("CATEGORIES:{categories_value}\n"));
                 categories_done = true;
             }
-            if !note_done {
-                out.push_str(&format!("NOTE:{new_note}\n"));
-                note_done = true;
+            if let Some(new_note) = note_override {
+                if !note_done {
+                    out.push_str(&format_note_property(new_note));
+                    note_done = true;
+                }
             }
             out.push_str(&format!("REV:{rev_value}\n"));
         }
@@ -1396,8 +1438,7 @@ fn update_note_field(content: &str, new_note: &str) -> Result<String> {
     
     for line in unfolded.lines() {
         if line.starts_with("NOTE:") {
-            // Replace the NOTE line
-            result.push_str(&format!("NOTE:{}\n", new_note));
+            result.push_str(&format_note_property(new_note));
             in_note = true;
         } else if in_note && (line.starts_with(' ') || line.starts_with('\t')) {
             // Skip continuation lines of old NOTE
@@ -1411,11 +1452,13 @@ fn update_note_field(content: &str, new_note: &str) -> Result<String> {
     
     // If no NOTE field existed, add one before END:VCARD
     if !result.contains("NOTE:") {
-        let note_line = format!("NOTE:{}", new_note);
+        let note_block = format_note_property(new_note).trim_end().to_string();
         let lines: Vec<&str> = result.lines().collect();
         if let Some(pos) = lines.iter().position(|&line| line.starts_with("END:VCARD")) {
             let mut owned_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
-            owned_lines.insert(pos, note_line);
+            for (offset, note_line) in note_block.lines().enumerate() {
+                owned_lines.insert(pos + offset, note_line.to_string());
+            }
             result = owned_lines.join("\n");
             result.push('\n');
         }
@@ -1427,6 +1470,31 @@ fn update_note_field(content: &str, new_note: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconnect_upsert_preserves_geo_adr_and_note() {
+        let block = "BEGIN:VCARD\nVERSION:4.0\nUID:test-contact\nADR;TYPE=HOME:;;;Chicago;IL;;\nFN:Jane Doe\nGEO:41.8;-87.6\nNOTE:May 2025: Met at networking event.\nREV:20260501T120000Z\nX-PEPPER-GEO-SOURCE:chicago\nEND:VCARD\n";
+        let out = upsert_reconnect_in_block(
+            block,
+            &["Reconnect: 3 months".to_string()],
+            "20260608T120000Z",
+            None,
+        );
+        assert!(out.contains("GEO:41.8;-87.6"));
+        assert!(out.contains("ADR;TYPE=HOME:;;;Chicago;IL;;"));
+        assert!(out.contains("CATEGORIES:Reconnect: 3 months"));
+        assert!(out.contains("NOTE:May 2025: Met at networking event."));
+        assert!(!out.contains("Updated reconnect time"));
+        assert!(out.contains("REV:20260608T120000Z"));
+    }
+
+    #[test]
+    fn format_note_property_folds_multiline_notes() {
+        let note = "June 2026: Updated reconnect time.\nMay 2025: Met at networking event.";
+        let prop = format_note_property(note);
+        assert!(prop.starts_with("NOTE:June 2026: Updated reconnect time.\n"));
+        assert!(prop.contains("\n May 2025: Met at networking event.\n"));
+    }
 
     #[test]
     fn test_unfold_vcard_lines() {

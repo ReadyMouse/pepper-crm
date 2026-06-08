@@ -87,6 +87,20 @@ pub fn normalize_geocode_query(query: &str) -> String {
         .join(" ")
 }
 
+/// True when a stored `X-PEPPER-GEO-SOURCE` still matches the contact address query.
+/// Nominatim often returns city-only (`chicago`) for a full query (`chicago, il`).
+pub fn geo_source_covers_query(source: &str, query: &str) -> bool {
+    let source = normalize_geocode_query(source);
+    let query = normalize_geocode_query(query);
+    if source == query {
+        return true;
+    }
+    source.starts_with(&format!("{query},"))
+        || source.starts_with(&format!("{query} "))
+        || query.starts_with(&format!("{source},"))
+        || query.starts_with(&format!("{source} "))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedGeoEntry {
     lat: f64,
@@ -100,6 +114,7 @@ struct CachedGeoFailure {
 }
 
 /// File-backed geocode cache under `.cache/geocode/` (successes and failures).
+#[derive(Clone)]
 pub struct FileGeocodeCache {
     cache_dir: PathBuf,
     fail_dir: PathBuf,
@@ -246,6 +261,16 @@ pub struct NominatimGeocoder {
     last_request: Mutex<Option<std::time::Instant>>,
 }
 
+impl Clone for NominatimGeocoder {
+    fn clone(&self) -> Self {
+        Self {
+            cache: self.cache.clone(),
+            user_agent: self.user_agent.clone(),
+            last_request: Mutex::new(None),
+        }
+    }
+}
+
 impl NominatimGeocoder {
     pub fn from_env(cache_root: impl AsRef<Path>) -> Result<Self> {
         let user_agent = std::env::var("NOMINATIM_USER_AGENT")
@@ -388,16 +413,37 @@ impl NominatimGeocoder {
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no geocode queries provided")))
     }
 
-    /// Sync multi-query geocode for matching loops.
+    /// Sync multi-query geocode for matching loops (CLI/tests). Uses a helper thread so
+    /// pepper-web never nests runtimes on tokio workers.
     pub fn geocode_queries(&self, queries: &[String]) -> Result<(GeoPoint, String)> {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(self.geocode_queries_async(queries)))
-        } else {
-            tokio::runtime::Runtime::new()
-                .context("tokio runtime for geocode")?
-                .block_on(self.geocode_queries_async(queries))
-        }
+        let geocoder = self.clone();
+        let queries = queries.to_vec();
+        run_on_helper_thread(async move { geocoder.geocode_queries_async(&queries).await })
     }
+}
+
+/// Run an async future on a helper thread (avoids dropping a nested runtime on tokio workers).
+pub(crate) fn run_on_helper_thread<F, T>(fut: F) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("pepper-blocking-async".to_string())
+        .spawn(move || {
+            let result: Result<T> = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt.block_on(fut),
+                Err(e) => Err(e.into()),
+            };
+            let _ = tx.send(result);
+        })
+        .context("spawn blocking-async thread")?;
+    rx.recv()
+        .map_err(|e| anyhow::anyhow!("blocking-async thread did not respond: {e}"))?
 }
 
 /// In-memory geocoder for tests (fixed coordinates).
@@ -493,13 +539,9 @@ impl<G: Geocoder> CachingGeocoder<G> {
 
 impl Geocoder for NominatimGeocoder {
     fn geocode(&self, query: &str) -> Result<GeoPoint> {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(self.geocode_async(query)))
-        } else {
-            tokio::runtime::Runtime::new()
-                .context("tokio runtime for geocode")?
-                .block_on(self.geocode_async(query))
-        }
+        let geocoder = self.clone();
+        let query = query.to_string();
+        run_on_helper_thread(async move { geocoder.geocode_async(&query).await })
     }
 
     fn is_failure_cached(&self, query: &str) -> Result<bool> {
@@ -521,6 +563,13 @@ impl<G: Geocoder> Geocoder for CachingGeocoder<G> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn geo_source_covers_city_only_match() {
+        assert!(geo_source_covers_query("chicago", "chicago, il"));
+        assert!(geo_source_covers_query("chicago, il", "chicago"));
+        assert!(!geo_source_covers_query("austin", "chicago, il"));
+    }
 
     #[test]
     fn test_place_query_variants_adds_country_suffixes() {

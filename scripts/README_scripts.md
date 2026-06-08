@@ -49,5 +49,5 @@ DIGEST_FORCE=1 ./scripts/run-weekly-digest.sh
 
 ## Related docs
 
-- [`README.md`](../README.md) — Raspberry Pi deployment and cron sections
+- [`README_technical.md`](../README_technical.md) — Raspberry Pi deployment and cron sections
 - [`README_pepper.md`](../pepper/README_pepper.md) — `pepper` CLI flags (`--send-if-due`, `--schedule-status`)

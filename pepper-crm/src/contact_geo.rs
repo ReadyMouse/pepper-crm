@@ -21,7 +21,7 @@ use crate::geo::{
 };
 use crate::models::Contact;
 use crate::vcard::{
-    contact_address_query, geocode_queries_for_contact, parse_contacts, write_contact_geo,
+    contact_address_query, geocode_queries_for_contact, write_contact_geo,
 };
 use anyhow::Result;
 use std::path::Path;
@@ -74,7 +74,7 @@ pub fn is_geo_stale(contact: &Contact) -> bool {
     };
     let current = normalize_geocode_query(&current);
     match &contact.geo_source {
-        Some(src) => normalize_geocode_query(src) != current,
+        Some(src) => !crate::geo::geo_source_covers_query(src, &current),
         // GEO present but no source line (legacy) — refresh once to stamp source.
         None => contact.geo.is_some(),
     }
@@ -92,7 +92,7 @@ pub async fn ensure_contacts_geocoded(
             stats.skipped_no_address += 1;
             continue;
         }
-        if let Some(point) = stamp_legacy_geo_if_needed(contact, write_back) {
+        if let Some(point) = stamp_legacy_geo_if_needed_async(contact, write_back).await {
             contact.geo = Some(point);
             stats.already_ok += 1;
             continue;
@@ -116,7 +116,7 @@ pub async fn ensure_contacts_geocoded(
         match geocoder.geocode_queries_async(&queries).await {
             Ok((point, matched_query)) => {
                 let source = normalize_geocode_query(&matched_query);
-                apply_geocode_to_contact(contact, point, &source, write_back);
+                apply_geocode_to_contact_async(contact, point, &source, write_back).await;
                 stats.geocoded += 1;
             }
             Err(e) => {
@@ -151,7 +151,8 @@ pub async fn ensure_contacts_geocoded_in_dir(
     cache_root: impl AsRef<Path>,
     write_back: bool,
 ) -> Result<(GeocodeEnsureStats, Vec<Contact>)> {
-    let mut contacts = parse_contacts(contacts_dir.as_ref())?;
+    let mut contacts =
+        crate::vcard::parse_contacts_async(contacts_dir.as_ref().to_path_buf()).await?;
     let (with_geo, with_address) = geo_coverage(&contacts);
     info!(
         contacts = contacts.len(),
@@ -277,6 +278,62 @@ fn apply_geocode_to_contact(
     contact.geo_source = Some(source.to_string());
 }
 
+async fn apply_geocode_to_contact_async(
+    contact: &mut Contact,
+    point: GeoPoint,
+    source: &str,
+    write_back: bool,
+) {
+    if write_back {
+        let contact_clone = contact.clone();
+        let source = source.to_string();
+        if let Err(e) = crate::vcard::run_contacts_io(move || {
+            write_contact_geo(&contact_clone, point, &source)
+        })
+        .await
+        {
+            tracing::warn!(
+                uid = %contact.uid,
+                path = %contact.vcf_path.display(),
+                error = %e,
+                "GEO write-back to vCard failed"
+            );
+        }
+    }
+    contact.geo = Some(point);
+    contact.geo_source = Some(source.to_string());
+}
+
+async fn stamp_legacy_geo_if_needed_async(
+    contact: &mut Contact,
+    write_back: bool,
+) -> Option<GeoPoint> {
+    if contact.geo.is_none() || contact.geo_source.is_some() {
+        return None;
+    }
+    let query = contact_address_query(contact)?;
+    let source = normalize_geocode_query(&query);
+    let point = contact.geo?;
+    if write_back {
+        let contact_clone = contact.clone();
+        let source = source.clone();
+        if let Err(e) = crate::vcard::run_contacts_io(move || {
+            write_contact_geo(&contact_clone, point, &source)
+        })
+        .await
+        {
+            tracing::warn!(
+                uid = %contact.uid,
+                path = %contact.vcf_path.display(),
+                error = %e,
+                "GEO source write-back to vCard failed"
+            );
+        }
+    }
+    contact.geo_source = Some(source);
+    contact.geo
+}
+
 /// Result of geocoding one contact after a dashboard location save.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeocodeContactOutcome {
@@ -300,7 +357,7 @@ pub async fn geocode_contact_after_location(
     if queries.is_empty() {
         return Ok(GeocodeContactOutcome::NoQueries);
     }
-    if let Some(point) = stamp_legacy_geo_if_needed(contact, write_back) {
+    if let Some(point) = stamp_legacy_geo_if_needed_async(contact, write_back).await {
         contact.geo = Some(point);
         return Ok(GeocodeContactOutcome::AlreadyOk);
     }
@@ -319,7 +376,7 @@ pub async fn geocode_contact_after_location(
     match geocoder.geocode_queries_async(&queries).await {
         Ok((point, matched_query)) => {
             let source = normalize_geocode_query(&matched_query);
-            apply_geocode_to_contact(contact, point, &source, write_back);
+            apply_geocode_to_contact_async(contact, point, &source, write_back).await;
             Ok(GeocodeContactOutcome::Geocoded)
         }
         Err(e) => {
@@ -430,6 +487,17 @@ mod tests {
         let c = contact_with_geo("Boston", "MA", Some(p), Some("boston, ma"));
         assert!(!needs_geocoding(&c));
         assert!(!is_geo_stale(&c));
+    }
+
+    #[test]
+    fn ok_when_geo_source_is_city_only_for_full_address() {
+        let p = GeoPoint {
+            lat: 41.88,
+            lng: -87.63,
+        };
+        let c = contact_with_geo("Chicago", "IL", Some(p), Some("chicago"));
+        assert!(!is_geo_stale(&c));
+        assert!(!needs_geocoding(&c));
     }
 
     #[test]

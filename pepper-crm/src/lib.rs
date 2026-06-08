@@ -102,7 +102,8 @@ pub use contact_geo::{
 pub use vcard::{
     contact_address_query, geocode_queries_for_contact, contacts_read_only, contacts_use_carddav,
     find_contact_by_uid,
-    log_interaction, parse_contacts, parse_vcard, parse_vcards_from_dir,
+    log_interaction, parse_contacts, parse_contacts_async, parse_vcard, parse_vcards_from_dir,
+    run_contacts_io,
     parse_rev_value, parse_vcards_from_path, set_contact_location, set_contact_note,
     set_random_pick_category, set_reconnect_snooze, write_contact_geo,
     complete_task,

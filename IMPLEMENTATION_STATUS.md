@@ -17,7 +17,7 @@ Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
 
 # Pepper — Implementation Status
 
-Living summary of what's built vs. planned. For setup and usage, see [`README.md`](README.md).
+Living summary of what's built vs. planned. For setup and usage, see [`README.md`](README.md) and [`README_technical.md`](README_technical.md).
 
 ---
 
@@ -155,6 +155,6 @@ CATEGORIES:Reconnect: 3 months
 
 Also supports trip triggers (`before Chicago trip`), `Reconnect: Never`, and legacy `Reconnect:` lines in `NOTE`.
 
-**Engagement categories** ([`README.md`](README.md#engagement-categories-in-categories)): `is_reconnect_never()`, `is_do_not_engage()` in `tags.rs`; wired through travel, random pick, due reconnects, and dashboard task list.
+**Engagement categories** ([`README_technical.md`](README_technical.md#engagement-categories)): `is_reconnect_never()`, `is_do_not_engage()` in `tags.rs`; wired through travel, random pick, due reconnects, and dashboard task list.
 
 Due dates anchor from vCard `REV` or latest `Month YYYY:` note line.

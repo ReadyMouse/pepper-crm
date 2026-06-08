@@ -27,7 +27,7 @@ Production schedule: **Monday 06:00** in your **trip timezone** (from `GOOGLE_CA
 ./scripts/install-weekly-cron.sh    # hourly crontab → run-weekly-digest.sh
 ```
 
-See [README — Weekly digest cron](../README.md#weekly-digest-cron-monday-600-trip-timezone).
+See [README_technical — Weekly digest cron](../README_technical.md#weekly-digest-cron-monday-600-trip-timezone).
 
 ## Open-source candidate
 

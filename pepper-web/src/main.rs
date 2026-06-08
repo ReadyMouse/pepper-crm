@@ -22,7 +22,7 @@ use pepper_crm::{
     build_travel_week_snapshot, complete_task, data_enrichment_picks,
     ensure_contacts_geocoded_in_dir, fetch_due_items, fetch_ics, find_contact_by_uid,
     dismiss_enrichment_pick, enrichment_issue, geocode_contact_after_location,
-    set_contact_location, trips_for_next_week, GeocodeContactOutcome,
+    run_contacts_io, set_contact_location, trips_for_next_week, GeocodeContactOutcome,
     upcoming_birthdays_from_contacts,
     BIRTHDAY_WINDOW_DAYS, DATA_ENRICHMENT_COUNT,
     km_to_miles, load_current_snapshot, miles_to_km, parse_contacts, contacts_read_only,
@@ -271,13 +271,16 @@ fn contacts_snapshot(state: &AppState) -> Arc<Vec<pepper_crm::Contact>> {
     state.contacts.read().expect("contacts lock poisoned").clone()
 }
 
-fn contact_by_uid(state: &AppState, uid: &str) -> Result<pepper_crm::Contact, String> {
-    let contacts = state.contacts.read().expect("contacts lock poisoned");
-    if let Some(contact) = contacts.iter().find(|c| c.uid == uid) {
+/// CardDAV uses `reqwest::blocking` — fall back lookup must not run on the tokio worker.
+async fn contact_by_uid_async(state: &AppState, uid: &str) -> Result<pepper_crm::Contact, String> {
+    if let Some(contact) = contacts_snapshot(state).iter().find(|c| c.uid == uid) {
         return Ok(contact.clone());
     }
-    drop(contacts);
-    find_contact_by_uid(&state.contacts_dir, uid).map_err(|e| format!("Contact not found: {e}"))
+    let contacts_dir = state.contacts_dir.clone();
+    let uid = uid.to_string();
+    run_contacts_io(move || find_contact_by_uid(&contacts_dir, &uid))
+        .await
+        .map_err(|e| format!("Contact not found: {e}"))
 }
 
 /// Parse VCF on a blocking thread — large exports overflow the default tokio worker stack.
@@ -744,9 +747,12 @@ async fn apply_random_pick_category(state: &AppState, form: &TravelSnoozeForm) -
     }
 
     let as_of = Local::now().date_naive();
-    let contact = contact_by_uid(state, &form.uid)?;
+    let uid = form.uid.clone();
+    let choice = choice.to_string();
+    let contact = contact_by_uid_async(state, &uid).await?;
 
-    set_random_pick_category(&contact, choice, as_of)
+    run_contacts_io(move || set_random_pick_category(&contact, &choice, as_of))
+        .await
         .map_err(|e| format!("Failed to update contact: {e}"))?;
 
     dismiss_random_pick(&state.cache_root, as_of, &form.uid)
@@ -804,9 +810,13 @@ async fn apply_task_complete(state: &AppState, form: &TaskCompleteForm) -> Resul
         return Err("Missing task description.".into());
     }
 
-    let contact = contact_by_uid(state, &form.uid)?;
+    let uid = form.uid.clone();
+    let description = description.to_string();
+    let contact = contact_by_uid_async(state, &uid).await?;
 
-    complete_task(&contact, description).map_err(|e| format!("Failed to update contact: {e}"))?;
+    run_contacts_io(move || complete_task(&contact, &description))
+        .await
+        .map_err(|e| format!("Failed to update contact: {e}"))?;
 
     reload_contacts_after_edit(state).await;
 
@@ -818,20 +828,32 @@ async fn apply_contact_location(
     form: &ContactLocationForm,
 ) -> Result<GeocodeContactOutcome, String> {
     ensure_contacts_writable()?;
-    let city = form.city.trim();
+    let city = form.city.trim().to_string();
     if city.is_empty() {
         return Err("City is required.".into());
     }
-    let state_str = form.state.trim();
+    let state_str = form.state.trim().to_string();
     let state_opt = (!state_str.is_empty()).then_some(state_str);
-    let street_str = form.street.trim();
+    let street_str = form.street.trim().to_string();
     let street_opt = (!street_str.is_empty()).then_some(street_str);
 
-    let contact = contact_by_uid(state, &form.uid)?;
-    set_contact_location(&contact, city, state_opt, street_opt)
+    let uid = form.uid.clone();
+    let contacts_dir = state.contacts_dir.clone();
+    let contact = contact_by_uid_async(state, &uid).await?;
+    run_contacts_io(move || {
+        set_contact_location(
+            &contact,
+            &city,
+            state_opt.as_deref(),
+            street_opt.as_deref(),
+        )
+    })
+        .await
         .map_err(|e| format!("Failed to update contact: {e}"))?;
 
-    let mut updated = find_contact_by_uid(&state.contacts_dir, &form.uid)
+    let reload_uid = uid.clone();
+    let mut updated = run_contacts_io(move || find_contact_by_uid(&contacts_dir, &reload_uid))
+        .await
         .map_err(|e| format!("Failed to reload contact: {e}"))?;
     let write_back = geo_write_to_vcf_enabled();
     let outcome = geocode_contact_after_location(&mut updated, &state.cache_root, write_back)
@@ -842,12 +864,12 @@ async fn apply_contact_location(
 
     let as_of = Local::now().date_naive();
     let contacts = contacts_snapshot(state);
-    if let Some(c) = contacts.iter().find(|c| c.uid == form.uid) {
+    if let Some(c) = contacts.iter().find(|c| c.uid == uid) {
         if enrichment_issue(c, &state.cache_root)
             .map_err(|e| format!("Failed to check enrichment status: {e}"))?
             .is_none()
         {
-            dismiss_enrichment_pick(&state.cache_root, as_of, &form.uid)
+            dismiss_enrichment_pick(&state.cache_root, as_of, &uid)
                 .map_err(|e| format!("Failed to update enrichment queue: {e}"))?;
         }
     }
@@ -935,9 +957,12 @@ async fn apply_travel_snooze(state: &AppState, form: &TravelSnoozeForm) -> Resul
     }
 
     let as_of = Local::now().date_naive();
-    let contact = contact_by_uid(state, &form.uid)?;
+    let uid = form.uid.clone();
+    let reconnect = reconnect.to_string();
+    let contact = contact_by_uid_async(state, &uid).await?;
 
-    set_random_pick_category(&contact, reconnect, as_of)
+    run_contacts_io(move || set_random_pick_category(&contact, &reconnect, as_of))
+        .await
         .map_err(|e| format!("Failed to update contact: {e}"))?;
 
     reload_contact_after_reconnect_edit(state, &form.uid).await;

@@ -1,6 +1,10 @@
 BEGIN:VCARD
 VERSION:4.0
 UID:test-contact
+ADR;TYPE=HOME:;;;Chicago;IL;;
+CATEGORIES:Reconnect: 3 months
 FN:Jane Doe
 N:Doe;Jane;;;
+NOTE:May 2025: Met at networking event.
+REV:20260608T044649Z
 END:VCARD

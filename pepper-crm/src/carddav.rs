@@ -128,16 +128,55 @@ impl CardDavClient {
 
     pub fn put_resource(&self, href: &str, body: &str) -> Result<()> {
         let url = self.absolute_url(href)?;
-        self.http
+        let body = vcard_to_crlf(body);
+        let response = self
+            .http
             .put(url)
             .headers(self.auth_headers())
             .header(CONTENT_TYPE, "text/vcard; charset=utf-8")
-            .body(body.to_string())
+            .body(body.clone())
             .send()
-            .with_context(|| format!("CardDAV PUT failed for {href}"))?
-            .error_for_status()
-            .with_context(|| format!("CardDAV PUT returned error for {href}"))?;
-        Ok(())
+            .with_context(|| format!("CardDAV PUT failed for {href}"))?;
+
+        if response.status().is_success() {
+            return Ok(());
+        }
+
+        let status = response.status();
+        let err_text = response.text().unwrap_or_default();
+        if self.put_persisted_despite_error(href, &body)? {
+            tracing::warn!(
+                href,
+                status = %status,
+                "CardDAV PUT returned error but GET confirms vCard was stored"
+            );
+            return Ok(());
+        }
+
+        anyhow::bail!(
+            "CardDAV PUT HTTP {status} for {href}: {}",
+            err_text.trim()
+        );
+    }
+
+    /// FreedomBox/Radicale sometimes returns 4xx/5xx on PUT even when the vCard was saved.
+    fn put_persisted_despite_error(&self, href: &str, expected: &str) -> Result<bool> {
+        for attempt in 0..4 {
+            if attempt > 0 {
+                std::thread::sleep(Duration::from_millis(75 * attempt as u64));
+            }
+            let stored = match self.get_resource(href) {
+                Ok(content) => content,
+                Err(e) => {
+                    tracing::debug!(href, attempt, error = %e, "CardDAV GET after failed PUT");
+                    continue;
+                }
+            };
+            if vcard_body_contains_expected(&stored, expected) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// PUT URL for a contact — uses stored href or `{collection}/{uid}.vcf`.
@@ -216,15 +255,162 @@ impl CardDavClient {
     }
 
     fn absolute_url(&self, href: &str) -> Result<String> {
-        if href.starts_with("http://") || href.starts_with("https://") {
-            return Ok(href.to_string());
-        }
-        let base = Url::parse(&self.config.collection_url).context("Invalid CARDDAV_URL")?;
-        let path = href.trim_start_matches('/');
-        base.join(path)
-            .map(|u| u.to_string())
-            .with_context(|| format!("Could not resolve CardDAV href {href}"))
+        resolve_carddav_href(&self.config.collection_url, href)
     }
+}
+
+/// Normalize vCard text to CRLF for CardDAV PUT (Radicale stores CRLF).
+fn vcard_to_crlf(body: &str) -> String {
+    body.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
+fn vcard_property_lines(s: &str) -> std::collections::BTreeSet<String> {
+    s.replace("\r\n", "\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// True when every property line we PUT is present after read-back (Radicale may reorder).
+fn vcard_body_contains_expected(stored: &str, expected: &str) -> bool {
+    let stored_lines = vcard_property_lines(stored);
+    let expected_lines: Vec<String> = expected
+        .replace("\r\n", "\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && is_vcard_property_line(line))
+        .map(ToString::to_string)
+        .collect();
+
+    for line in &expected_lines {
+        let key = line.split(':').next().unwrap_or("");
+        if key == "NOTE" || key.starts_with("NOTE;") {
+            continue;
+        }
+        if key == "REV" || key.starts_with("REV;") {
+            if !stored_lines.iter().any(|s| s.starts_with("REV")) {
+                return false;
+            }
+            continue;
+        }
+        if !vcard_line_present_in_stored(&stored_lines, line) {
+            return false;
+        }
+    }
+
+    match (unfolded_note_text(expected), unfolded_note_text(stored)) {
+        (Some(expected_note), Some(stored_note)) => {
+            normalize_note_for_compare(&expected_note) == normalize_note_for_compare(&stored_note)
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn unfolded_note_text(content: &str) -> Option<String> {
+    let mut note = String::new();
+    let mut in_note = false;
+    for line in content.replace("\r\n", "\n").lines() {
+        if let Some(value) = line.strip_prefix("NOTE:") {
+            note.push_str(value);
+            in_note = true;
+        } else if in_note && (line.starts_with(' ') || line.starts_with('\t')) {
+            note.push_str(line.trim_start());
+        } else {
+            in_note = false;
+        }
+    }
+    if note.is_empty() {
+        None
+    } else {
+        Some(note)
+    }
+}
+
+fn normalize_note_for_compare(note: &str) -> String {
+    note.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+fn is_vcard_property_line(line: &str) -> bool {
+    let key = line.split(':').next().unwrap_or("").trim();
+    !key.is_empty()
+        && key.bytes().all(|b| b.is_ascii_uppercase() || b == b'-' || b == b';')
+}
+
+fn normalize_vcard_line_for_compare(line: &str) -> String {
+    line.replace("\\;", ";").replace("\\,", ",")
+}
+
+fn vcard_property_key_value(line: &str) -> Option<(&str, String)> {
+    let (key, value) = line.split_once(':')?;
+    Some((key.trim(), normalize_vcard_line_for_compare(value.trim())))
+}
+
+fn geo_property_points_match(expected_line: &str, stored_line: &str) -> bool {
+    fn parse_geo_coords(line: &str) -> Option<(f64, f64)> {
+        let (_, value) = vcard_property_key_value(line)?;
+        let coords = value.strip_prefix("geo:").unwrap_or(&value);
+        let sep = if coords.contains(';') { ';' } else { ',' };
+        let mut parts = coords.split(sep);
+        let lat: f64 = parts.next()?.trim().parse().ok()?;
+        let lng: f64 = parts.next()?.trim().parse().ok()?;
+        Some((lat, lng))
+    }
+    match (
+        parse_geo_coords(expected_line),
+        parse_geo_coords(stored_line),
+    ) {
+        (Some((elat, elng)), Some((slat, slng))) => {
+            (elat - slat).abs() < 1e-6 && (elng - slng).abs() < 1e-6
+        }
+        _ => false,
+    }
+}
+
+fn vcard_line_present_in_stored(
+    stored_lines: &std::collections::BTreeSet<String>,
+    expected_line: &str,
+) -> bool {
+    let expected_norm = normalize_vcard_line_for_compare(expected_line);
+    if stored_lines
+        .iter()
+        .any(|stored| normalize_vcard_line_for_compare(stored) == expected_norm)
+    {
+        return true;
+    }
+    let key = expected_norm.split(':').next().unwrap_or("");
+    if key == "GEO" || key.starts_with("GEO;") {
+        return stored_lines
+            .iter()
+            .any(|stored| geo_property_points_match(&expected_norm, stored));
+    }
+    if key.starts_with("X-PEPPER-GEO-SOURCE") {
+        let Some((_, expected_val)) = vcard_property_key_value(&expected_norm) else {
+            return false;
+        };
+        return stored_lines.iter().any(|stored| {
+            vcard_property_key_value(stored)
+                .filter(|(k, _)| k.starts_with("X-PEPPER-GEO-SOURCE"))
+                .map(|(_, v)| crate::geo::geo_source_covers_query(&v, &expected_val))
+                .unwrap_or(false)
+        });
+    }
+    false
+}
+
+/// Resolve a CardDAV href from REPORT/PROPFIND or a relative filename against `CARDDAV_URL`.
+fn resolve_carddav_href(collection_url: &str, href: &str) -> Result<String> {
+    if href.starts_with("http://") || href.starts_with("https://") {
+        return Ok(href.to_string());
+    }
+    let base = Url::parse(collection_url).context("Invalid CARDDAV_URL")?;
+    // FreedomBox/Radicale hrefs are server-root paths (`/radicale/.../uid.vcf`). Do not strip
+    // the leading slash — that would duplicate path segments when joined to the collection URL.
+    base.join(href)
+        .map(|u| u.to_string())
+        .with_context(|| format!("Could not resolve CardDAV href {href}"))
 }
 
 fn normalize_collection_url(url: &str) -> String {
@@ -440,5 +626,53 @@ END:VCARD</C:address-data>
             normalize_collection_url("https://pi.example/contacts"),
             "https://pi.example/contacts/"
         );
+    }
+
+    #[test]
+    fn resolve_carddav_href_server_root_path() {
+        let collection = "https://localhost:8443/radicale/admin/test-contacts/";
+        let href = "/radicale/admin/test-contacts/2f1571de-a405-4be7-b497-f150813a53aa.vcf";
+        assert_eq!(
+            resolve_carddav_href(collection, href).unwrap(),
+            "https://localhost:8443/radicale/admin/test-contacts/2f1571de-a405-4be7-b497-f150813a53aa.vcf"
+        );
+    }
+
+    #[test]
+    fn resolve_carddav_href_relative_filename() {
+        let collection = "https://localhost:8443/radicale/admin/test-contacts/";
+        assert_eq!(
+            resolve_carddav_href(collection, "test-contact.vcf").unwrap(),
+            "https://localhost:8443/radicale/admin/test-contacts/test-contact.vcf"
+        );
+    }
+
+    #[test]
+    fn vcard_to_crlf_normalizes_mixed_endings() {
+        assert_eq!(
+            vcard_to_crlf("BEGIN:VCARD\nFN:Ada\r\nEND:VCARD\n"),
+            "BEGIN:VCARD\r\nFN:Ada\r\nEND:VCARD\r\n"
+        );
+    }
+
+    #[test]
+    fn vcard_body_contains_expected_ignores_order_and_endings() {
+        let expected = "BEGIN:VCARD\nFN:Ada\nUID:1\nADR;TYPE=HOME:;;;Austin;TX;;\nEND:VCARD\n";
+        let stored = "BEGIN:VCARD\r\nUID:1\r\nADR;TYPE=HOME:;;;Austin;TX;;\r\nFN:Ada\r\nEND:VCARD\r\n";
+        assert!(vcard_body_contains_expected(stored, expected));
+    }
+
+    #[test]
+    fn vcard_body_contains_expected_matches_radicale_folded_note() {
+        let expected = "BEGIN:VCARD\nUID:1\nNOTE:May 2025: Met at event.\nCATEGORIES:Reconnect: 3 months\nREV:20260608T120000Z\nEND:VCARD\n";
+        let stored = "BEGIN:VCARD\r\nUID:1\r\nNOTE:May 2025: Met at event.\r\nCATEGORIES:Reconnect: 3 months\r\nREV:20260608T120001Z\r\nEND:VCARD\r\n";
+        assert!(vcard_body_contains_expected(stored, expected));
+    }
+
+    #[test]
+    fn vcard_body_contains_expected_matches_radicale_geo_escaping() {
+        let expected = "BEGIN:VCARD\nUID:1\nGEO:41.8755616;-87.6244212\nX-PEPPER-GEO-SOURCE:chicago\nEND:VCARD\n";
+        let stored = "BEGIN:VCARD\r\nUID:1\r\nGEO:41.8755616\\;-87.6244212\r\nX-PEPPER-GEO-SOURCE:chicago\r\nEND:VCARD\r\n";
+        assert!(vcard_body_contains_expected(stored, expected));
     }
 }
