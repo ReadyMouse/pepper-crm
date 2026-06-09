@@ -1644,7 +1644,7 @@ END:VCARD"#;
 VERSION:3.0
 UID:geo-test-1
 FN:Geo Person
-ADR;TYPE=HOME:;;10 Main St;Boston;MA;02101;USA
+ADR;TYPE=HOME:;;;Boston;MA;;
 END:VCARD"#;
         let dir = std::env::temp_dir().join("pepper_geo_test");
         let _ = fs::remove_dir_all(&dir);

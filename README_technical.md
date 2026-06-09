@@ -260,11 +260,30 @@ Debian 13 + FreedomBox (Radicale) in VirtualBox for CardDAV testing without a Pi
 vagrant up          # note first-boot secret in terminal output
 # https://localhost:8443 — finish FreedomBox wizard (try admin / freedombox)
 vagrant ssh
-vagrant provision --provision-with restart-radicale
+vagrant provision --provision-with restart-radicale   # after editing test .vcf files on the host
 vagrant halt / vagrant destroy
 ```
 
-`tests/data/radicale/` syncs to `/var/lib/radicale` in the guest (`admin/test-contacts` sample book). Point `CARDDAV_*` at the VM once Radicale is configured.
+`tests/data/radicale/` syncs to `/var/lib/radicale` in the guest (`admin/test-contacts` sample book). On each `vagrant up`, the guest copies that folder to native ext4 (`/var/lib/radicale-native/collections`) because Radicale fsync fails on VirtualBox shared folders. After editing test vCards on the host, run `vagrant provision --provision-with restart-radicale` to refresh the live book.
+
+Point `CARDDAV_*` at the VM once Radicale is configured:
+
+```bash
+CARDDAV_URL=https://localhost:8443/radicale/admin/test-contacts/
+CONTACTS_READ_ONLY=false
+GEO_WRITE_TO_VCF=true
+```
+
+**CardDAV smoke tests** (with `.env` loaded):
+
+```bash
+cargo run -p pepper-crm --example carddav_list
+cargo run -p pepper-crm --example carddav_snooze -- test-contact "1 week"
+cargo run -p pepper-crm --example carddav_write_location -- test-contact "Chicago" IL
+cargo run --bin pepper-web   # dashboard at http://localhost:3000
+```
+
+If CardDAV returns **503**, restart the uwsgi Radicale app: `vagrant provision --provision-with restart-radicale`.
 
 ## Raspberry Pi deployment
 
@@ -309,7 +328,6 @@ Logs: `~/pepper-crm/logs/weekly-digest.log`. Override binary path with `PEPPER_B
 | Doc | Description |
 |-----|-------------|
 | [`README.md`](README.md) | User overview and quick start |
-| [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) | Built vs. planned |
 | [`personal_crm_design.md`](personal_crm_design.md) | Full design document |
 | [`pepper-crm/README_pepper-crm.md`](pepper-crm/README_pepper-crm.md) | Core library |
 | [`pepper-web/README_pepper-web.md`](pepper-web/README_pepper-web.md) | Web dashboard |

@@ -80,11 +80,33 @@ Vagrant.configure("2") do |config|
       mount -t vboxsf -o uid=$(id -u radicale),gid=$(id -g radicale) radicale_home /var/lib/radicale
     EOF
   end
+  config.vm.provision "sync-radicale-native", type: "shell", run: "always" do |p|
+    p.inline = <<~EOF
+      # Radicale fsync fails on VirtualBox shared folders; serve from native ext4.
+      NATIVE=/var/lib/radicale-native/collections
+      mkdir -p "$NATIVE"
+      cp -a /var/lib/radicale/collections/. "$NATIVE/"
+      chown -R radicale:radicale /var/lib/radicale-native
+      rm -rf "$NATIVE/collection-root/admin/test-contacts/.Radicale.cache"
+      rm -rf /var/lib/radicale/collections/.Radicale.lock
+      if ! grep -q 'filesystem_folder = /var/lib/radicale-native/collections' /etc/radicale/config; then
+        sed -i 's|^#filesystem_folder = .*|filesystem_folder = /var/lib/radicale-native/collections|' /etc/radicale/config
+      fi
+      systemctl restart uwsgi
+      ln -sf /run/uwsgi/app/radicale/socket /run/uwsgi/radicale.socket
+    EOF
+  end
   config.vm.provision "restart-radicale", type: "shell", run: "never" do |p|
     p.inline = <<~EOF
-      echo -n Restarting Radicale CalDAV Server...
+      echo -n Syncing test contacts to native storage and restarting CardDAV...
+      NATIVE=/var/lib/radicale-native/collections
+      mkdir -p "$NATIVE"
+      cp -a /var/lib/radicale/collections/. "$NATIVE/"
+      chown -R radicale:radicale /var/lib/radicale-native
       rm -rf /var/lib/radicale/collections/.Radicale.lock
-      systemctl restart radicale.service
+      rm -rf "$NATIVE/collection-root/admin/test-contacts/.Radicale.cache"
+      systemctl restart uwsgi
+      ln -sf /run/uwsgi/app/radicale/socket /run/uwsgi/radicale.socket
       echo done.
     EOF
   end

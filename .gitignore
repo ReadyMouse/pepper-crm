@@ -57,9 +57,10 @@ Desktop.ini
 *.bak
 *.backup
 
-# Agents
+# Agents / one-off doc runs
 documentation_agent.md
 documentation_subagent.md
+DOCUMENTATION_PROGRESS.md
 
 .vagrant
 **/.Radicale.lock

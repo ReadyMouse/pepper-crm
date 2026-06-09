@@ -1,310 +1,195 @@
 <!--
 # Personal CRM Agent — Design Document
 
-  Authoritative architecture and scope document for the Pepper CRM prototype.
+  Architecture and scope for Pepper CRM.
 
 INPUT:
   - Product requirements, vCard/tag conventions, MCP transport decisions
 
 OUTPUT:
-  - Design principles, crate layout, weekly run sequence
+  - Design principles, crate layout, data model, upgrade path
 
 NOTES:
-  - Some crate names differ from implementation (e.g. crm-core → pepper-crm); README is canonical for current layout.
+  - Operational detail (env vars, Vagrant, Pi cron) lives in README_technical.md.
+  - User overview lives in README.md.
 
-Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
+Written by Cursor for Ready Mouse and Pepper CRM. June 2026. All rights reserved.
 -->
 
 # Personal CRM Agent — Design Document
 
-> **For:** Claude (via Cursor IDE)
-> **Author:** Mylo
-> **Date:** May 2026
-> **Status:** Prototype phase — local VCF files only, no live CardDAV
+> **Author:** Mylo  
+> **Date:** May–June 2026  
+> **Status:** Working prototype — local VCF or CardDAV (Radicale), weekly CLI, web dashboard
 
 ---
 
 ## What We Are Building
 
-A lightweight personal CRM agent built as a Rust MCP server workspace. It reads contact data from `.vcf` (vCard) files, parses structured tags from the notes field, sends a weekly HTML email digest with `.ics` calendar attachments for upcoming follow-ups, and surfaces travel-based reconnect suggestions.
+**Pepper** is a lightweight personal CRM built as a Rust workspace. It reads contact data from vCards (local `.vcf` files or CardDAV), parses structured tags, sends a weekly HTML email digest with `.ics` reconnect reminders, and surfaces travel-based reconnect suggestions on a local dashboard.
 
-The system runs as a weekly cron job today. It is architected as MCP servers from day one so that a Claude agent can call the same tools directly in the future — with no changes to the servers themselves.
+```
+Phone Contacts  ↔  DAVx⁵ / CardDAV  ↔  Radicale (.vcf)  ↔  Pepper (pepper + pepper-web)
+```
 
-**It does not:** require a database or duplicate contact data outside vCards.
+The weekly `pepper` binary runs on a schedule (cron on a Pi). MCP servers expose the same operations for a future agent workflow. **No separate CRM database** — vCards are the store.
 
-**It does:** read local VCF files, write interaction logs back to them, track tasks and reconnects in vCard fields, generate `.ics` files, and send one useful email per week.
+**It does:** parse tags, compute due tasks/reconnects, match contacts to trips, geocode addresses, write snooze/task/geo updates back to vCards, send one useful email per week, and show a dashboard at `http://localhost:3000`.
+
+**Planned:** agent-driven interaction log (`--- CRM Log ---`) via MCP or a Matrix bot; HTTP/SSE MCP transport for live agent calls.
 
 ---
 
 ## Core Design Principles
 
-- **VCF is the source of truth.** Contact data, tasks (`TODO:` in NOTE), and reconnect intervals (`Reconnect:` in CATEGORIES) all live in vCards.
-- **Notes field is human-readable first.** Tags are plain text that a human can read and edit in any contacts app. No binary formats, no proprietary fields.
-- **Write-back is append-only.** The agent never modifies existing note content. It only appends to a clearly delimited log block below a `--- CRM Log ---` separator.
-- **Last tag wins.** If `Reconnect:` appears multiple times in a note, the last one is authoritative. Re-scheduling means appending a new tag, not editing the old one.
-- **Dry-run always works.** The `--dry-run` flag must be safe at any time. No emails sent, no VCF modifications.
-- **Prototype locally, promote to Pi.** The only change between local prototype and Pi production is the contacts source (local files vs. CardDAV) and the cron schedule.
-- **stdio now, HTTP/SSE later.** MCP servers use stdio transport during development. Switching to HTTP/SSE transport makes them persistent daemons callable by a live agent — no tool signatures change.
+- **VCF is the source of truth.** Tasks, reconnect intervals, geo, and (eventually) CRM log entries live in vCard fields.
+- **Human-readable tags.** `TODO:` in Notes; `Reconnect:` in Categories — editable in any contacts app.
+- **Reconnect snooze writes `CATEGORIES` + `REV`.** Timed snooze sets `Reconnect: …` in Categories and refreshes `REV` as the anchor. It does **not** stamp the Notes field.
+- **CRM log is append-only (when enabled).** The agent must not rewrite interaction history above `--- CRM Log ---`; it only appends dated entries below the separator.
+- **Last `Reconnect:` wins.** In Categories (or legacy NOTE lines), the last matching tag is authoritative.
+- **Dry-run always works.** `pepper --dry-run` previews the digest without sending email.
+- **Prototype locally, promote to Pi.** Same code; swap `CONTACTS_DIR` for `CARDDAV_*` and run on the Pi with cron.
+- **stdio now, HTTP/SSE later.** MCP servers use stdio today; transport can change without altering tool semantics.
 
 ---
 
-## Prototype Scope (Build This First)
+## Built Today
 
-- Read `.vcf` files from a local directory (`./contacts/`)
-- Parse `TODO:` and `Reconnect:` tags from vCard fields
-- Compute due tasks and reconnects directly from parsed contacts
-- Generate a weekly HTML email digest
-- Attach `.ics` files for reconnect reminders
-- Send via SMTP
-- Write interaction logs back into VCF `NOTE` fields (local files only for now)
-- Generate a set of realistic fake VCF contacts for testing
-
-**Not in prototype scope:**
-- CardDAV read/write (stubbed with a `// TODO: CardDAV` comment block)
-- HTTP/SSE transport (servers use stdio only)
-- AI enrichment
-- Matrix bot
-- Geo radius search
+| Area | Status |
+|------|--------|
+| VCF parse/write (2.1/3.0/4.0, line folding) | ✅ |
+| `TODO:` tasks in NOTE | ✅ |
+| `Reconnect:` in CATEGORIES (+ legacy NOTE) | ✅ |
+| Due-date anchoring from `REV` or `Month YYYY:` note | ✅ |
+| `Reconnect: Never`, `Do Not Engage` | ✅ |
+| Weekly HTML digest + `.ics` attachments | ✅ |
+| `pepper-web` dashboard | ✅ |
+| Travel matching (calendar ICS + metro radius) | ✅ |
+| Nominatim geocoding + `GEO` / `X-PEPPER-GEO-SOURCE` write-back | ✅ |
+| CardDAV read (REPORT) + write (PUT) for Radicale | ✅ |
+| Vagrant homelab (FreedomBox + Radicale) for CardDAV testing | ✅ |
+| Random Person of the Week, birthdays, data enrichment picks | ✅ |
+| MCP servers (stdio) | ✅ |
+| Agent `log_interaction` / CRM log in production flows | 🔲 planned |
+| Matrix bot | 🔲 planned |
+| HTTP/SSE MCP transport | 🔲 planned |
 
 ---
 
 ## Cargo Workspace Structure
 
-All crates live in a single Cargo workspace. One shared library (`crm-core`) contains all business logic. Each MCP server is a thin binary crate that wraps `crm-core` functionality as MCP tools. The runner is the MCP client that orchestrates the weekly sequence.
-
 ```
-personal-crm/
-├── Cargo.toml                  # workspace root — lists all members
+pepper-crm/
+├── Cargo.toml                  # workspace root
 ├── .env.example
-├── contacts/                   # local .vcf files for prototyping
-│   └── (generated test contacts)
-│
-├── crm-core/                   # shared library crate
-│   ├── Cargo.toml
+├── contacts/                   # local .vcf prototyping (gitignored *.vcf)
+├── pepper-crm/                 # shared library
 │   └── src/
-│       ├── lib.rs
-│       ├── vcard.rs            # VCF parsing and write-back
-│       ├── tags.rs             # TODO:/Reconnect: tag extraction
-│       ├── models.rs           # shared structs (Contact, DueReconnectInfo, etc.)
-│       └── ical.rs             # .ics generation helpers
-│
-├── mcp-vcard-server/               # MCP server binary: read/write VCF
-│   ├── Cargo.toml
-│   └── src/main.rs
-│
-├── mcp-digest-server/              # MCP server binary: render HTML email
-│   ├── Cargo.toml
-│   └── src/main.rs
-│
-├── mcp-cal-server/                 # MCP server binary: generate .ics files
-│   ├── Cargo.toml
-│   └── src/main.rs
-│
-├── mcp-mailer-server/              # MCP server binary: send via SMTP
-│   ├── Cargo.toml
-│   └── src/main.rs
-│
-├── mcp-crm-runner/                 # MCP client binary: orchestrates weekly run
-│   ├── Cargo.toml
-│   └── src/main.rs
-│
-├── templates/
-│   └── digest.html             # Tera email template
-└── tests/
-    ├── test_vcard_parsing.rs
-    ├── test_tag_extraction.rs
-    └── generate_test_contacts.rs  # creates fake .vcf files for testing
+│       ├── vcard.rs            # parse/write VCF, CardDAV I/O
+│       ├── carddav.rs          # Radicale REPORT/PUT
+│       ├── tags.rs             # TODO/Reconnect extraction, due dates
+│       ├── tasks.rs            # pending TODOs, complete → NOTE write-back
+│       ├── models.rs
+│       ├── ical.rs
+│       ├── calendar.rs         # Google Calendar ICS trips
+│       ├── digest.rs / weekly.rs / mail.rs
+│       ├── geo.rs / contact_geo.rs
+│       ├── travel.rs / travel_cache.rs
+│       ├── birthdays.rs / random_pick.rs / data_enrichment.rs
+│       └── ...
+├── pepper/                     # weekly CLI (`pepper --dry-run`)
+├── pepper-web/                 # Axum dashboard
+├── mcp-vcard-server/
+├── mcp-digest-server/
+├── mcp-cal-server/
+├── mcp-mailer-server/
+├── mcp-calendar-server/
+├── mcp-travel-server/
+├── templates/digest.html
+├── tests/data/radicale/        # Vagrant CardDAV fixtures
+├── Vagrantfile
+└── scripts/                    # Pi cross-compile + cron
 ```
 
-### Workspace `Cargo.toml`
-
-```toml
-[workspace]
-members = [
-    "crm-core",
-    "vcard-server",
-    "scheduler-server",
-    "digest-server",
-    "cal-server",
-    "mailer-server",
-    "crm-runner",
-]
-resolver = "2"
-
-[workspace.dependencies]
-rmcp        = { version = "0.16", features = ["server", "transport-io"] }
-sqlx        = { version = "0.7", features = ["postgres", "runtime-tokio", "chrono", "uuid"] }
-tokio       = { version = "1", features = ["full"] }
-serde       = { version = "1", features = ["derive"] }
-serde_json  = "1"
-anyhow      = "1"
-chrono      = { version = "0.4", features = ["serde"] }
-uuid        = { version = "1", features = ["v4", "serde"] }
-dotenvy     = "0.15"
-tracing     = "0.1"
-tracing-subscriber = "0.3"
-```
+The weekly CLI calls `pepper-crm` directly. MCP binaries are thin wrappers for future agent orchestration.
 
 ---
 
-## Transport: stdio (prototype) → HTTP/SSE (production)
+## Contacts Source: Local Files vs CardDAV
 
-During prototyping, `crm-runner` spawns each server binary as a **child process** and communicates over **stdin/stdout** using JSON-RPC (the rmcp stdio transport). Each server lives only for the duration of its tool call, then exits. Nothing listens on a port. Nothing needs to be kept alive between runs.
+| Mode | Config | Use |
+|------|--------|-----|
+| **Local** | `CONTACTS_DIR=./contacts` (no `CARDDAV_*`) | Laptop dev, read/write `.vcf` on disk |
+| **CardDAV** | `CARDDAV_URL`, `CARDDAV_USER`, `CARDDAV_PASS` | Pi or Vagrant Radicale; phone sync via DAVx⁵ |
+| **Safe prod** | `CONTACTS_READ_ONLY=true`, `GEO_WRITE_TO_VCF=false` | Probe Pi book before enabling writes |
 
-```
-cron (Sunday night)
-  └── spawns crm-runner
-        ├── spawns vcard-server     → parse_vcards() → exits
-        ├── spawns scheduler-server → get_due()      → exits
-        ├── spawns digest-server    → render_digest() → exits
-        ├── spawns cal-server       → export_ics()   → exits
-        └── spawns mailer-server    → send_email()   → exits
-```
+CardDAV implementation (`carddav.rs`): `addressbook-query` REPORT for reads; HTTP PUT per contact href for snooze, task complete, location, and geo write-back. FreedomBox may return HTTP 500 on PUT even when the vCard was stored — Pepper re-GETs and verifies content.
 
-**Upgrading to agent-callable (future):** change the transport in each server's `main.rs` from `stdio()` to `SseServerTransport`. The server becomes a persistent daemon. Tool signatures, business logic, and `crm-core` are all unchanged. `crm-runner` is retired in favour of a Claude agent calling the tools directly.
+Local homelab: Debian + FreedomBox in VirtualBox (`vagrant up`). See [`README_technical.md`](README_technical.md#local-homelab-vagrant).
 
 ---
 
-## MCP Tool Surface
+## Tag Format
 
-Each server exposes one or more `#[tool]`-annotated functions via `rmcp`. These are the callable interface for both the runner today and an agent in the future.
+### `TODO:` — in `NOTE`
 
-### `vcard-server`
-
-```rust
-parse_vcards(dir: String) -> Vec<Contact>
-// Scans a directory of .vcf files, returns parsed contacts with tags extracted
-
-log_interaction(uid: String, note: String, new_reconnect_tag: Option<String>) -> bool
-// Appends a dated log entry to the contact's NOTE field
-// Optionally appends a new Reconnect: tag
-// Writes back to the local .vcf file
-// TODO: CardDAV — replace fs::write with PUT to Radicale endpoint
-```
-
-### `scheduler-server`
-
-```rust
-upsert_contacts(contacts: Vec<Contact>) -> UpsertResult
-// Syncs parsed contact + tag data into Postgres
-
-get_due(window_days: u32) -> DueItems
-// Returns tasks and reconnects due within window_days from today
-// Cross-references Postgres status to avoid re-sending already-sent items
-```
-
-### `digest-server`
-
-```rust
-render_digest(due_items: DueItems, week_of: String) -> String
-// Renders the HTML email body using the Tera template
-// Returns the HTML string — does not send
-```
-
-### `cal-server`
-
-```rust
-export_ics(reconnects: Vec<ReconnectItem>) -> Vec<IcsFile>
-// Generates one VCALENDAR/VEVENT per reconnect
-// Returns (filename, ics_bytes) pairs
-```
-
-### `mailer-server`
-
-```rust
-send_email(
-    recipient: String,
-    subject: String,
-    html_body: String,
-    attachments: Vec<IcsFile>
-) -> bool
-// Sends via SMTP using credentials from .env
-// Attaches each .ics as text/calendar
-```
-
----
-
-## `crm-runner` Sequence
-
-The runner is the MCP client. It calls tools in order, passing output from one as input to the next.
-
-```rust
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // 1. Spawn vcard-server, call parse_vcards("./contacts")
-    // 2. Spawn scheduler-server, call upsert_contacts(contacts)
-    // 3. Call get_due(window_days=7) -> due_items
-    // 4. Spawn digest-server, call render_digest(due_items, week_of)
-    // 5. Spawn cal-server, call export_ics(due_items.reconnects)
-    // 6. Spawn mailer-server, call send_email(recipient, subject, html, ics_files)
-    // 7. Spawn scheduler-server, call mark_sent(reconnect_ids)
-    // 8. Log digest run to Postgres digest_log table
-
-    // --dry-run: skip steps 6, 7, 8 — print HTML to stdout instead
-    Ok(())
-}
-```
-
----
-
-## VCF Note Field — Tag Format
-
-The `NOTE` field is the only field the agent reads structured data from or writes to. All other vCard fields (name, email, phone, address, org) are read-only from the agent's perspective.
-
-### Tag Syntax
-
-Tags are written one per line. The agent reads the **last occurrence** of a tag.
+One line per task, inside the Notes field (not a separate vCard property):
 
 ```
-NOTE: Met at Consensus Miami. Works on ZK proofs at Aztec.
-TODO: intro to the Zcash core team
-TODO: send link to ZCG grant template
-Reconnect: 3 months
+July 2026: Met at conference.
+
+TODO: send intro email
 ```
 
-### Supported Tags
+Completing a task removes that `TODO:` line from NOTE via write-back.
 
-| Tag | Format | Behaviour |
-|---|---|---|
-| `TODO:` | `TODO: free text` | Creates a task linked to this contact |
-| `Reconnect:` | `Reconnect: N days/weeks/months` | Schedule a timed follow-up |
-| `Reconnect:` | `Reconnect: before [city] trip` | Parse but set status `deferred` — do not schedule yet |
-
-### Interaction Log Write-Back
+### `Reconnect:` — in `CATEGORIES`
 
 ```
-NOTE: Met at Consensus Miami. Works on ZK proofs at Aztec.
-TODO: intro to the Zcash core team
-Reconnect: 3 months
+CATEGORIES:Pool Player: BOS,Reconnect: 3 months
+```
+
+Supported values: timed intervals (`1 week`, `3 months`, …), trip triggers (`before Chicago trip`), `Reconnect: Never`, and `Do Not Engage`.
+
+Legacy `Reconnect:` lines in NOTE are still read as a fallback.
+
+**Snooze / random pick:** updates `CATEGORIES` (`Reconnect: …`) and `REV` only — leaves interaction notes unchanged.
+
+**Due-date anchor:** `REV` timestamp or the latest `Month YYYY:` line in NOTE (e.g. `May 2026: Had coffee`).
+
+### Engagement categories
+
+| Category | Meaning |
+|----------|---------|
+| `Reconnect: Never` | No timed nudges; still eligible for random pick + birthdays |
+| `Do Not Engage` | Omit from all Pepper surfaces |
+
+### CRM log (planned)
+
+Append-only block below `--- CRM Log ---`:
+
+```
 --- CRM Log ---
-2026-05-14: Reconnect email sent re Zcash Kitchen grant. Reset to 6 months.
-Reconnect: 6 months
+2026-05-14: Sent follow-up email.
 ```
 
-Rules:
-- `--- CRM Log ---` separator added once, on first write
-- Each entry format: `YYYY-MM-DD: [note text]`
-- Agent always reads the **last** `Reconnect:` tag in the file
-- Agent never modifies content above the separator
+Library support exists (`log_interaction`); weekly CLI and dashboard do not call it yet.
 
 ---
 
-## Task and reconnect state (vCard)
+## Write-Back Summary
 
-Tasks and reconnect scheduling are stored in vCard fields — not a separate database:
-
-- **Tasks:** `TODO:` lines in the `NOTE` field (removed on completion via write-back)
-- **Reconnects:** `Reconnect:` in `CATEGORIES` (or legacy NOTE), with due dates computed from `REV` or note anchors
-
-> **Historical note:** An early prototype used PostgreSQL (`migrations/001_initial.sql`, `db.rs`, `mcp-scheduler-server`). That layer was removed; vCards are the sole store.
+| Action | Fields written |
+|--------|----------------|
+| Snooze reconnect | `CATEGORIES`, `REV` |
+| Mark task done | `NOTE` (remove `TODO:` line) |
+| Save location / geocode | `ADR`, `GEO`, `X-PEPPER-GEO-SOURCE` |
+| Do Not Engage | `CATEGORIES`, `NOTE` (stamp), `REV` |
+| CRM log (planned) | `NOTE` (append below separator) |
 
 ---
 
-## `crm-core` Module Responsibilities
-
-### `vcard.rs`
-
-Parses `.vcf` files using the `ical` crate (handles vCard 2.1 / 3.0 / 4.0).
+## `pepper-crm` — Key Types
 
 ```rust
 pub struct Contact {
@@ -313,164 +198,115 @@ pub struct Contact {
     pub email: Option<String>,
     pub phone: Option<String>,
     pub org: Option<String>,
-    pub city: Option<String>,       // parsed from ADR field
+    pub city: Option<String>,
+    pub state: Option<String>,
     pub country: Option<String>,
-    pub note_raw: String,           // full raw NOTE field
-    pub todos: Vec<String>,         // TODO: texts above CRM Log separator
-    pub reconnect_tag: Option<String>,  // last Reconnect: value found
-    pub log_entries: Vec<String>,   // lines from CRM Log block
-    pub vcf_path: PathBuf,          // needed for write-back
+    pub geo: Option<GeoPoint>,
+    pub geo_source: Option<String>,
+    pub note_raw: String,
+    pub todos: Vec<String>,
+    pub categories: Vec<String>,
+    pub reconnect_tag: Option<String>,
+    pub log_entries: Vec<String>,
+    pub vcf_path: PathBuf,
+    pub carddav_href: Option<String>,
 }
 ```
 
-Notes:
-- Strip `--- CRM Log ---` block before parsing tags
-- Handle vCard line folding (lines wrapped with leading whitespace)
-- Gracefully skip malformed vCards with `tracing::warn!`
-- `// TODO: CardDAV` comment marks where `fs::write` becomes a `PUT` request
-
-### `tags.rs`
-
-Pure functions, no I/O.
-
-```rust
-pub fn parse_todos(note: &str) -> Vec<String>
-pub fn parse_reconnect_tag(note: &str) -> Option<String>
-pub fn tag_to_due_date(tag: &str, from: NaiveDate) -> Option<NaiveDate>
-pub fn is_city_trigger(tag: &str) -> bool
-pub fn append_log_entry(note: &str, entry: &str, new_tag: Option<&str>) -> String
-```
-
-`tag_to_due_date` handles:
-- `"2 weeks"` → from + 14 days
-- `"3 months"` → from + 3 months (chrono month arithmetic)
-- `"before NY trip"` → `None` (city trigger, caller sets status to `deferred`)
-
-### `tasks.rs`
-
-Reads open `TODO:` items from parsed contacts and removes completed lines on write-back.
-
-### `ical.rs`
-
-```rust
-pub fn build_ics(reconnect: &DueReconnectInfo) -> Result<IcsFile>
-// Returns a complete VCALENDAR string for one reconnect event
-// SUMMARY: "Follow up: [Full Name]"
-// DTSTART: due_date as all-day event
-// VALARM: 1 day before
-```
+Parsing notes:
+- Strip `--- CRM Log ---` before extracting `TODO:` / month-year anchors
+- Unfold vCard continuation lines
+- `Reconnect:` resolved from `CATEGORIES` first, then legacy NOTE
 
 ---
 
-## Test Contact Generator
+## MCP Tool Surface (stdio today)
 
-`tests/generate_test_contacts.rs` — run with:
+| Server | Tools |
+|--------|-------|
+| `mcp-vcard-server` | `parse_vcards`; `log_interaction` (planned in flows) |
+| `mcp-digest-server` | `render_digest` |
+| `mcp-cal-server` | `export_ics` |
+| `mcp-mailer-server` | `send_email` |
+| `mcp-calendar-server` | `get_upcoming_travel` |
+| `mcp-travel-server` | `build_travel_week`, `get_travel_week` |
+
+**Historical note:** An early prototype used PostgreSQL and `mcp-scheduler-server`. That layer was removed; vCards are the sole store.
+
+---
+
+## Weekly Run Sequence (`pepper`)
+
+1. Parse contacts (VCF dir or CardDAV)
+2. Collect due tasks and reconnects from tags
+3. Render HTML digest (Tera template)
+4. Generate `.ics` attachments for due reconnects
+5. Send email via SMTP (skip on `--dry-run`)
+6. Build travel snapshot when calendar URL is configured (`--force-travel` or weekly cache miss)
+
+Cron on Pi: hourly `pepper --send-if-due` → Monday 6:00 in the trip timezone.
+
+---
+
+## Test Data
 
 ```bash
-cargo test --test generate_test_contacts -- --ignored
+cargo test -p pepper-crm --test generate_test_contacts -- --ignored
 ```
 
-Generates 20 `.vcf` files in `./contacts/` using the `fake` crate.
+Creates 20 scenario vCards in `./contacts/`. CardDAV fixtures for Vagrant live in `tests/data/radicale/`.
 
-| Scenario | Count |
-|---|---|
-| No tags at all | 3 |
-| TODO: only, no reconnect | 3 |
-| Reconnect: only, due this week | 3 |
-| Multiple TODOs + Reconnect | 3 |
-| `Reconnect: before [city] trip` (deferred) | 2 |
-| Already has CRM Log block with prior entries | 2 |
-| Reconnect: overdue by 2 weeks | 2 |
-| Missing email, phone, org (incomplete record) | 2 |
+CardDAV smoke tests (with `CARDDAV_*` in `.env`):
 
----
-
-## Key Dependencies
-
-```toml
-# crm-core/Cargo.toml (beyond workspace deps)
-ical        = "0.10"        # vCard 2.1/3.0/4.0 parser
-icalendar   = "0.16"        # .ics generation
-tera        = "1"           # email templating
-lettre      = "0.11"        # SMTP sending
-
-# dev-dependencies
-fake        = "2"           # test data generation
+```bash
+cargo run -p pepper-crm --example carddav_list
+cargo run -p pepper-crm --example carddav_snooze -- test-contact "1 week"
+cargo run -p pepper-crm --example carddav_write_location -- test-contact "Chicago" IL
 ```
 
 ---
 
 ## Environment Variables
 
-```bash
-# .env.example
+See [`.env.example`](.env.example) and [`README_technical.md`](README_technical.md#environment-variables). Key groups:
 
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=you@gmail.com
-SMTP_PASS=your-app-password
-
-DIGEST_RECIPIENT=you@youremail.com
-CONTACTS_DIR=./contacts
-RECONNECT_WINDOW_DAYS=7
-```
+- `CONTACTS_DIR` / `CARDDAV_*` — people store
+- `CONTACTS_READ_ONLY`, `GEO_WRITE_TO_VCF` — write safety
+- `SMTP_*`, `DIGEST_RECIPIENT` — weekly email
+- `GOOGLE_CALENDAR_ICS_URL` — travel trips
+- `NOMINATIM_USER_AGENT` — geocoding
 
 ---
 
 ## Local Dev Setup
 
 ```bash
-# 1. Clone and build
-git clone [repo]
-cd personal-crm
-cargo build
-
-# 2. Configure
 cp .env.example .env
-# edit .env with your SMTP credentials and DB password
+cargo build --workspace
 
-# 4. Generate test contacts
-cargo test --test generate_test_contacts -- --ignored
-
-# 5. Dry run (no email sent, prints digest to stdout)
-cargo run -p crm-runner -- --dry-run
-
-# 6. Live run
-cargo run -p crm-runner
+cargo run --bin pepper-web              # dashboard → http://localhost:3000
+cargo run --bin pepper -- --dry-run     # preview weekly email
+cargo run --bin pepper                  # send digest
 ```
 
 ---
 
-## CardDAV Integration (Production — Not Prototype)
+## Upgrade Path: Agent-Callable MCP
 
-When ready to connect to the live Pi CardDAV server (Radicale):
+When ready for a live Claude agent:
 
-- `vcard.rs`: replace directory scan with HTTP `REPORT` request to Radicale, fetching vCards from `card:address-data` XML elements
-- Write-back: replace `fs::write(&vcf_path, updated)` with HTTP `PUT` to `https://[pi-ip]/[user]/contacts/[uid].vcf`
-- Auth: HTTP Basic — add `CARDDAV_URL`, `CARDDAV_USER`, `CARDDAV_PASS` to `.env`
-- All other crates unchanged
+1. Add HTTP/SSE transport to MCP server binaries
+2. Run servers as persistent daemons on the Pi (systemd)
+3. Agent calls `log_interaction`, travel, and digest tools directly
+4. Cron becomes a scheduled agent invocation or keeps triggering `pepper --send-if-due`
 
-The `// TODO: CardDAV` comment block in `vcard.rs` marks the exact lines to replace.
+Tool signatures and vCard tag format stay stable across the transport change.
 
 ---
 
-## Upgrade Path: stdio → Agent-Callable
+## Related Docs
 
-When ready to make the servers callable by a live Claude agent:
-
-1. Add `transport-sse` feature to `rmcp` in each server's `Cargo.toml`
-2. In each server `main.rs`, swap:
-
-```rust
-// before (stdio — prototype)
-let server = MyServer::new().serve(stdio()).await?;
-
-// after (HTTP/SSE — production)
-let server = MyServer::new().serve(SseServerTransport::new("0.0.0.0:8080")).await?;
-```
-
-3. Add a systemd service for each server on the Pi so they start on boot
-4. Retire `crm-runner` — Claude calls the tools directly via MCP
-5. Cron becomes a scheduled Claude agent call, or stays as a simple trigger
-
-Tool signatures, `crm-core`, database schema, and VCF tag format are all unchanged.
+| Doc | Purpose |
+|-----|---------|
+| [`README.md`](README.md) | User overview and quick start |
+| [`README_technical.md`](README_technical.md) | Env vars, CardDAV, Vagrant, Pi deployment, full tag spec |

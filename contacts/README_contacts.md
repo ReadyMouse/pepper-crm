@@ -11,7 +11,6 @@ Directory of vCard (`.vcf`) files used as the people store during local prototyp
 | `contact_01.vcf`–`contact_20.vcf` | Generated test scenarios (TODO, reconnect, trip triggers, CRM logs) |
 | `reconnect_due_*.vcf` | Focused fixtures for reconnect due-date edge cases |
 | `contacts.vcf` | Real export (gitignored pattern in `.gitignore`) |
-| `pepper_test.vcf` | Manual test contact |
 
 ## Why no per-file doc headers
 

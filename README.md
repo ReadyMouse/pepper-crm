@@ -43,6 +43,8 @@ cargo run --bin pepper-web              # dashboard → http://localhost:3000
 cargo test -p pepper-crm --test generate_test_contacts -- --ignored
 ```
 
+**CardDAV without a Pi:** A [Vagrant](https://www.vagrantup.com/) VM (Debian + FreedomBox + Radicale) lets you exercise Pepper’s CardDAV read/write against fake contacts before touching your phone or Pi. Requires VirtualBox. Point `CARDDAV_*` in `.env` at `https://localhost:8443/radicale/admin/test-contacts/`, set `CONTACTS_READ_ONLY=false` and `GEO_WRITE_TO_VCF=true`, then run the `carddav_*` examples or `pepper-web`. Full setup, smoke tests, and troubleshooting: [`README_technical.md#local-homelab-vagrant`](README_technical.md#local-homelab-vagrant).
+
 ## Tag your contacts
 
 Edit these in any contacts app (Notes and Categories fields).
@@ -84,7 +86,6 @@ Timed reconnects use `REV` or a `Month YYYY:` note line (e.g. `May 2026: Had cof
 | Doc | For |
 |-----|-----|
 | [`README_technical.md`](README_technical.md) | Architecture, env vars, CardDAV, Vagrant, Pi cron |
-| [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) | What's built vs. planned |
 | [`personal_crm_design.md`](personal_crm_design.md) | Full design doc |
 
 ## License
