@@ -132,6 +132,15 @@ async fn build_travel_week_snapshot_async(
     let trips = resolve_trips_for_build(config, &ics)?;
     let contacts_dir = config.contacts_dir.clone();
     let mut contacts = crate::vcard::parse_contacts_async(contacts_dir).await?;
+    // Fill coordinates from the persistent cache first (no network) so already-known contacts
+    // don't get re-geocoded — critical for read-only CardDAV where GEO isn't stored on the server.
+    let hydrated = crate::contact_geo::hydrate_contacts_from_geocode_cache(
+        &mut contacts,
+        &config.cache_root,
+    );
+    if hydrated > 0 {
+        info!("Hydrated {hydrated} contacts with cached coordinates (no geocode needed)");
+    }
     let run_geo_ensure = config.ensure_contact_geo || should_ensure_contact_geo(&contacts);
     if run_geo_ensure && !config.ensure_contact_geo {
         info!(

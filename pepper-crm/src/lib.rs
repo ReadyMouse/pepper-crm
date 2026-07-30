@@ -47,7 +47,8 @@ pub use birthdays::{
 };
 pub use data_enrichment::{
     data_enrichment_picks, dismiss_enrichment_pick, enrichment_issue,
-    is_data_enrichment_eligible, DATA_ENRICHMENT_COUNT,
+    is_data_enrichment_eligible, resolve_data_enrichment_picks, shuffle_and_save_enrichment,
+    DATA_ENRICHMENT_COUNT,
 };
 pub use digest::{
     birthdays_from_contacts, build_digest_input, build_digest_input_from_due,
@@ -96,8 +97,8 @@ pub use travel_cache::{
 pub use contact_geo::{
     contact_geocode_queries_all_failed, contact_has_unusable_geo, ensure_contacts_geocoded,
     ensure_contacts_geocoded_in_dir, ensure_contacts_geocoded_sync, geocode_contact_after_location,
-    geo_coverage, is_geo_stale, needs_geocoding, should_ensure_contact_geo, GeocodeContactOutcome,
-    GeocodeEnsureStats,
+    geo_coverage, hydrate_contacts_from_geocode_cache, is_geo_stale, needs_geocoding,
+    should_ensure_contact_geo, GeocodeContactOutcome, GeocodeEnsureStats,
 };
 pub use vcard::{
     contact_address_query, geocode_queries_for_contact, contacts_read_only, contacts_use_carddav,

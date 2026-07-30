@@ -74,6 +74,10 @@
             {% if travel_just_refreshed %}
             <p class="travel-flash travel-flash-ok">Travel list rebuilt from calendar + contacts.</p>
             {% endif %}
+            {% if travel_building %}
+            <p class="travel-flash travel-flash-info">Building travel matches in the background (first run geocodes contacts and can take a few minutes). This page will refresh automatically.</p>
+            <script>setTimeout(function () { window.location.replace('/'); }, 20000);</script>
+            {% endif %}
             {% if travel_snoozed %}
             <p class="travel-flash travel-flash-ok">Reconnect updated on contact — removed from this week's list.</p>
             {% endif %}
@@ -320,7 +324,15 @@
         <div class="section">
             <div class="section-header">
                 <h2>Data Enrichment</h2>
+                {% if enrichment_can_shuffle %}
+                <form method="post" action="/enrichment/shuffle" class="random-shuffle-form">
+                    <button type="submit" class="btn-shuffle">Shuffle 3 new</button>
+                </form>
+                {% endif %}
             </div>
+            {% if enrichment_just_shuffled %}
+            <p class="travel-flash travel-flash-ok">Three new contacts to enrich.</p>
+            {% endif %}
             {% if enrichment_location_saved and enrichment_geo_ok %}
             <p class="travel-flash travel-flash-ok">Location and coordinates saved — showing the next contact who needs a fix.</p>
             {% elif enrichment_location_saved and enrichment_geo_failed %}

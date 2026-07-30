@@ -87,6 +87,9 @@ pub struct DataEnrichmentInfo {
 pub struct DataEnrichmentWeek {
     pub picks: Vec<DataEnrichmentInfo>,
     pub eligible_count: usize,
+    /// True when picks came from a manual shuffle (not the default weekly draw).
+    #[serde(default)]
+    pub shuffled: bool,
 }
 
 /// One contact with a birthday in the dashboard window.

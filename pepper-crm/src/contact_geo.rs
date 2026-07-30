@@ -53,6 +53,45 @@ pub fn geo_coverage(contacts: &[Contact]) -> (usize, usize) {
     (with_geo, with_address)
 }
 
+/// Populate `contact.geo` from the persistent on-disk geocode cache without any network calls.
+///
+/// This is the key to fast travel matching when reading from a read-only CardDAV source
+/// (Radicale), whose vCards carry no `GEO`: coordinates can't be written back to the server, so
+/// they'd otherwise be re-fetched from Nominatim on every reload. Hydrating from the cache lets
+/// contacts load already-geocoded. TTL is ignored on purpose — a cached coordinate for the
+/// contact's current address stays valid until that address changes (a changed address produces a
+/// different, uncached query and is left for the geocode ensure pass). Returns how many were filled.
+pub fn hydrate_contacts_from_geocode_cache(
+    contacts: &mut [Contact],
+    cache_root: impl AsRef<Path>,
+) -> usize {
+    let ttl_days = std::env::var("GEOCODE_CACHE_TTL_DAYS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(7);
+    let cache = FileGeocodeCache::new(cache_root, ttl_days);
+    let mut hydrated = 0usize;
+    for contact in contacts.iter_mut() {
+        if contact.geo.is_some() {
+            continue;
+        }
+        for query in geocode_queries_for_contact(contact) {
+            if query.trim().is_empty() {
+                continue;
+            }
+            if let Ok(Some(point)) = cache.read_any(&query, true) {
+                if is_plausible_geo_point(point) {
+                    contact.geo = Some(point);
+                    contact.geo_source = Some(normalize_geocode_query(&query));
+                    hydrated += 1;
+                    break;
+                }
+            }
+        }
+    }
+    hydrated
+}
+
 /// Run a geocode ensure pass when most address contacts lack coordinates (fresh Google export).
 pub fn should_ensure_contact_geo(contacts: &[Contact]) -> bool {
     let (with_geo, with_address) = geo_coverage(contacts);

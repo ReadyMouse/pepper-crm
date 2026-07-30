@@ -23,9 +23,9 @@ use crate::vcard::geocode_queries_for_contact;
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use rand::seq::SliceRandom;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, thread_rng, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -36,6 +36,12 @@ const DATA_ENRICHMENT_CACHE_SUBDIR: &str = "data_enrichment";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DismissedCache {
+    week_id: String,
+    uids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ShuffleCache {
     week_id: String,
     uids: Vec<String>,
 }
@@ -56,6 +62,39 @@ fn dismissed_cache_path(cache_root: &Path, week_id: &str) -> PathBuf {
     cache_root
         .join(DATA_ENRICHMENT_CACHE_SUBDIR)
         .join(format!("{week_id}-dismissed.json"))
+}
+
+fn shuffle_cache_path(cache_root: &Path, week_id: &str) -> PathBuf {
+    cache_root
+        .join(DATA_ENRICHMENT_CACHE_SUBDIR)
+        .join(format!("{week_id}-shuffle.json"))
+}
+
+fn load_shuffle_override(cache_root: &Path, week_id: &str) -> Result<Option<Vec<String>>> {
+    let path = shuffle_cache_path(cache_root, week_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = std::fs::read_to_string(&path)
+        .with_context(|| format!("read enrichment shuffle {}", path.display()))?;
+    let cache: ShuffleCache = serde_json::from_str(&data)?;
+    if cache.week_id != week_id {
+        return Ok(None);
+    }
+    Ok(Some(cache.uids))
+}
+
+fn save_shuffle_override(cache_root: &Path, week_id: &str, uids: &[String]) -> Result<()> {
+    let path = shuffle_cache_path(cache_root, week_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let cache = ShuffleCache {
+        week_id: week_id.to_string(),
+        uids: uids.to_vec(),
+    };
+    std::fs::write(&path, serde_json::to_string_pretty(&cache)?)?;
+    Ok(())
 }
 
 fn load_dismissed_uids(cache_root: &Path, week_id: &str) -> Result<HashSet<String>> {
@@ -165,17 +204,12 @@ fn issue_sort_key(issue: DataEnrichmentIssue) -> u8 {
     }
 }
 
-/// Pick up to `count` contacts for the ISO week containing `as_of`.
-pub fn data_enrichment_picks(
-    contacts: &[Contact],
-    cache_root: impl AsRef<Path>,
-    as_of: NaiveDate,
-    count: usize,
-) -> Result<DataEnrichmentWeek> {
-    let cache_root = cache_root.as_ref();
-    let (week_id, _) = week_meta(as_of);
-    let dismissed = load_dismissed_uids(cache_root, &week_id)?;
-
+/// Eligible contacts with their enrichment issue, sorted deterministically (issue, name, uid).
+fn eligible_with_issues<'a>(
+    contacts: &'a [Contact],
+    cache_root: &Path,
+    dismissed: &HashSet<String>,
+) -> Vec<(&'a Contact, DataEnrichmentIssue)> {
     let mut eligible: Vec<(&Contact, DataEnrichmentIssue)> = contacts
         .iter()
         .filter(|c| is_random_pick_eligible(c) && !dismissed.contains(&c.uid))
@@ -193,7 +227,21 @@ pub fn data_enrichment_picks(
             .then_with(|| a.full_name.cmp(&b.full_name))
             .then_with(|| a.uid.cmp(&b.uid))
     });
+    eligible
+}
 
+/// Pick up to `count` contacts for the ISO week containing `as_of` (stable weekly seed).
+pub fn data_enrichment_picks(
+    contacts: &[Contact],
+    cache_root: impl AsRef<Path>,
+    as_of: NaiveDate,
+    count: usize,
+) -> Result<DataEnrichmentWeek> {
+    let cache_root = cache_root.as_ref();
+    let (week_id, _) = week_meta(as_of);
+    let dismissed = load_dismissed_uids(cache_root, &week_id)?;
+
+    let mut eligible = eligible_with_issues(contacts, cache_root, &dismissed);
     let eligible_count = eligible.len();
     let mut rng = StdRng::seed_from_u64(week_seed(&week_id));
     eligible.shuffle(&mut rng);
@@ -207,7 +255,119 @@ pub fn data_enrichment_picks(
     Ok(DataEnrichmentWeek {
         picks,
         eligible_count,
+        shuffled: false,
     })
+}
+
+/// Non-deterministic shuffle that avoids `exclude_uids` while enough other contacts exist.
+fn data_enrichment_picks_shuffled(
+    contacts: &[Contact],
+    cache_root: &Path,
+    count: usize,
+    exclude_uids: &[String],
+    dismissed: &HashSet<String>,
+) -> DataEnrichmentWeek {
+    let eligible = eligible_with_issues(contacts, cache_root, dismissed);
+    let eligible_count = eligible.len();
+
+    if eligible.is_empty() {
+        return DataEnrichmentWeek {
+            picks: Vec::new(),
+            eligible_count: 0,
+            shuffled: true,
+        };
+    }
+
+    let exclude: HashSet<&str> = exclude_uids.iter().map(|s| s.as_str()).collect();
+    let mut pool: Vec<(&Contact, DataEnrichmentIssue)> = eligible
+        .iter()
+        .copied()
+        .filter(|(c, _)| !exclude.contains(c.uid.as_str()))
+        .collect();
+    if pool.len() < count {
+        pool = eligible;
+    }
+
+    pool.shuffle(&mut thread_rng());
+
+    let take = count.min(pool.len());
+    let picks = pool[..take]
+        .iter()
+        .map(|(c, issue)| contact_to_info(c, *issue))
+        .collect();
+
+    DataEnrichmentWeek {
+        picks,
+        eligible_count,
+        shuffled: true,
+    }
+}
+
+fn build_week_from_uids(
+    contacts: &[Contact],
+    cache_root: &Path,
+    uids: &[String],
+    dismissed: &HashSet<String>,
+) -> Result<DataEnrichmentWeek> {
+    let eligible_count = eligible_with_issues(contacts, cache_root, dismissed).len();
+    let by_uid: HashMap<&str, &Contact> = contacts.iter().map(|c| (c.uid.as_str(), c)).collect();
+    let mut picks = Vec::new();
+    for uid in uids {
+        let Some(contact) = by_uid.get(uid.as_str()) else {
+            continue;
+        };
+        if dismissed.contains(uid) || !is_random_pick_eligible(contact) {
+            continue;
+        }
+        if let Some(issue) = enrichment_issue(contact, cache_root)? {
+            picks.push(contact_to_info(contact, issue));
+        }
+    }
+    Ok(DataEnrichmentWeek {
+        picks,
+        eligible_count,
+        shuffled: true,
+    })
+}
+
+/// Resolve picks for the dashboard: shuffle override if present, else weekly default.
+pub fn resolve_data_enrichment_picks(
+    contacts: &[Contact],
+    cache_root: impl AsRef<Path>,
+    as_of: NaiveDate,
+    count: usize,
+) -> Result<DataEnrichmentWeek> {
+    let cache_root = cache_root.as_ref();
+    let (week_id, _) = week_meta(as_of);
+    let dismissed = load_dismissed_uids(cache_root, &week_id)?;
+    if let Some(uids) = load_shuffle_override(cache_root, &week_id)? {
+        if !uids.is_empty() {
+            let week = build_week_from_uids(contacts, cache_root, &uids, &dismissed)?;
+            // Fall back to the weekly draw once every shuffled pick has been resolved.
+            if !week.picks.is_empty() {
+                return Ok(week);
+            }
+        }
+    }
+    data_enrichment_picks(contacts, cache_root, as_of, count)
+}
+
+/// Shuffle, persist override for this ISO week, and return fresh picks.
+pub fn shuffle_and_save_enrichment(
+    contacts: &[Contact],
+    cache_root: impl AsRef<Path>,
+    as_of: NaiveDate,
+    count: usize,
+    current_uids: &[String],
+) -> Result<DataEnrichmentWeek> {
+    let cache_root = cache_root.as_ref();
+    let (week_id, _) = week_meta(as_of);
+    let dismissed = load_dismissed_uids(cache_root, &week_id)?;
+    let week =
+        data_enrichment_picks_shuffled(contacts, cache_root, count, current_uids, &dismissed);
+    let uids: Vec<String> = week.picks.iter().map(|p| p.uid.clone()).collect();
+    save_shuffle_override(cache_root, &week_id, &uids)?;
+    Ok(week)
 }
 
 #[cfg(test)]
@@ -334,6 +494,54 @@ mod tests {
         assert_eq!(
             a.picks.iter().map(|p| p.uid.as_str()).collect::<Vec<_>>(),
             b.picks.iter().map(|p| p.uid.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn shuffle_override_round_trips_and_persists() {
+        let dir = TempDir::new().unwrap();
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 28).unwrap();
+        let contacts: Vec<Contact> = (0..8)
+            .map(|i| sample_contact(&format!("u{i}"), &format!("Person {i}")))
+            .collect();
+
+        let shuffled = shuffle_and_save_enrichment(
+            &contacts,
+            dir.path(),
+            as_of,
+            DATA_ENRICHMENT_COUNT,
+            &[],
+        )
+        .unwrap();
+        assert!(shuffled.shuffled);
+        assert_eq!(shuffled.picks.len(), DATA_ENRICHMENT_COUNT);
+
+        let resolved =
+            resolve_data_enrichment_picks(&contacts, dir.path(), as_of, DATA_ENRICHMENT_COUNT)
+                .unwrap();
+        assert!(resolved.shuffled);
+        assert_eq!(
+            resolved.picks.iter().map(|p| &p.uid).collect::<Vec<_>>(),
+            shuffled.picks.iter().map(|p| &p.uid).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn resolve_falls_back_to_weekly_without_override() {
+        let dir = TempDir::new().unwrap();
+        let as_of = NaiveDate::from_ymd_opt(2026, 5, 28).unwrap();
+        let contacts: Vec<Contact> = (0..8)
+            .map(|i| sample_contact(&format!("u{i}"), &format!("Person {i}")))
+            .collect();
+        let weekly =
+            data_enrichment_picks(&contacts, dir.path(), as_of, DATA_ENRICHMENT_COUNT).unwrap();
+        let resolved =
+            resolve_data_enrichment_picks(&contacts, dir.path(), as_of, DATA_ENRICHMENT_COUNT)
+                .unwrap();
+        assert!(!resolved.shuffled);
+        assert_eq!(
+            resolved.picks.iter().map(|p| &p.uid).collect::<Vec<_>>(),
+            weekly.picks.iter().map(|p| &p.uid).collect::<Vec<_>>()
         );
     }
 
