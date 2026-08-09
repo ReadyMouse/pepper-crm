@@ -10,7 +10,7 @@
 //!   - `RandomPickWeek` with up to three eligible contacts and metadata for the UI.
 //!
 //! NOTES:
-//!   - Excludes `Do Not Engage` and venue/business cards; `Reconnect: Never` is eligible.
+//!   - Excludes `Do Not Engage`, `Reconnect: Never`, and venue/business cards.
 //!   - Shuffle overrides persist at `.cache/random_pick/{week_id}-shuffle.json` until next ISO week.
 //!
 //! Written by Cursor for Ready Mouse and Pepper CRM. May 2026. All rights reserved.
@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn excludes_do_not_engage_and_venue() {
+    fn excludes_never_do_not_engage_and_venue() {
         let as_of = NaiveDate::from_ymd_opt(2026, 5, 19).unwrap();
         let mut mom = sample("mom", "Mom");
         mom.categories = vec!["Reconnect: Never".into()];
@@ -501,10 +501,9 @@ mod tests {
 
         let ok = sample("ok", "Regular Friend");
         let result = random_picks_for_week(&[mom, blocked, venue, ok], as_of, 3);
-        assert_eq!(result.eligible_count, 2);
+        assert_eq!(result.eligible_count, 1);
         let names: Vec<_> = result.picks.iter().map(|p| p.full_name.as_str()).collect();
-        assert!(names.contains(&"Mom") || names.contains(&"Regular Friend"));
-        assert!(!names.iter().any(|n| *n == "Blocked Person"));
+        assert_eq!(names, vec!["Regular Friend"]);
     }
 
     #[test]

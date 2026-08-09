@@ -34,7 +34,7 @@ Set on vCard `CATEGORIES` (same field as `Reconnect:` tags).
 
 | Category | Meaning | Still in VCF? |
 |----------|---------|---------------|
-| `Reconnect: Never` | No timed reconnect nudges; close contacts (e.g. mom). May appear in Random Person of the Week and birthday reminders. **Never** in Reconnects Due or Next Week Travel. | Yes |
+| `Reconnect: Never` | No timed reconnect nudges; close contacts (e.g. mom). May appear in Todos and birthday reminders. **Never** in Reconnects Due, Next Week Travel, or Random Person of the Week. | Yes |
 | `Do Not Engage` | Never surface anywhere — no suggestions, travel, random pick, or search. Keep the card for your records only. | Yes |
 
 Examples:

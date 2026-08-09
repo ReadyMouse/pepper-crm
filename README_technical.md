@@ -173,8 +173,7 @@ CATEGORIES:Reconnect: 3 months
 
 Supported values:
 
-- **Timed intervals** — `1 week`, `3 months`, `1 year`, etc.
-- **Trip triggers** — `before Chicago trip`
+- **Timed intervals** — `1 week`, `1 month`, `3 months`, `6 months`
 - **No timed reconnect** — `Reconnect: Never` (see below)
 
 Legacy `Reconnect:` lines in `NOTE` are still read as a fallback.
@@ -191,7 +190,8 @@ Close contacts without interval nudges (family, partners, daily colleagues).
 |---------|-----------|
 | Reconnects Due | No |
 | Next Week Travel | No |
-| Random Person of the Week | Yes |
+| Random Person of the Week | No |
+| Todos | Yes |
 | Birthday reminders | Yes |
 
 #### `Do Not Engage`

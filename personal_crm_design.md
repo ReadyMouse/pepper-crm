@@ -161,7 +161,7 @@ Legacy `Reconnect:` lines in NOTE are still read as a fallback.
 
 | Category | Meaning |
 |----------|---------|
-| `Reconnect: Never` | No timed nudges; still eligible for random pick + birthdays |
+| `Reconnect: Never` | No timed nudges; eligible for todos + birthdays only (not travel, reconnects, or random pick) |
 | `Do Not Engage` | Omit from all Pepper surfaces |
 
 ### CRM log (planned)

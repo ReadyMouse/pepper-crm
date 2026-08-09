@@ -346,9 +346,12 @@ pub fn due_reconnects_from_contacts(
 }
 
 /// Whether a contact may appear in the weekly random-pick spotlight (people only).
-/// `Reconnect: Never` is eligible; `Do Not Engage` and venues are not.
+/// Excludes `Do Not Engage`, `Reconnect: Never`, and venue/business cards.
 pub fn is_random_pick_eligible(contact: &crate::models::Contact) -> bool {
     if is_do_not_engage(&contact.categories) {
+        return false;
+    }
+    if is_reconnect_never(&contact.categories, contact.reconnect_tag.as_deref()) {
         return false;
     }
     !is_venue_contact(contact)
@@ -776,7 +779,7 @@ mod tests {
         assert!(is_random_pick_eligible(&c));
 
         c.categories = vec!["Reconnect: Never".into()];
-        assert!(is_random_pick_eligible(&c));
+        assert!(!is_random_pick_eligible(&c));
 
         c.categories = vec!["Do Not Engage".into()];
         assert!(!is_random_pick_eligible(&c));
