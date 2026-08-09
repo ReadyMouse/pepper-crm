@@ -45,6 +45,13 @@ if ! command -v cc >/dev/null 2>&1; then
   exit 1
 fi
 
+# lettre (email) links against system OpenSSL; building needs the dev headers.
+if ! pkg-config --exists openssl 2>/dev/null; then
+  echo "ERROR: OpenSSL development headers not found (needed by the email library)." >&2
+  echo "Fix once with:  sudo apt install -y libssl-dev pkg-config" >&2
+  exit 1
+fi
+
 # --- 2. Pull the latest code -------------------------------------------------
 BEFORE="$(git rev-parse HEAD)"
 git pull --ff-only origin main
