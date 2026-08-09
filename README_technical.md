@@ -14,6 +14,9 @@ NOTES:
 
 Written by Cursor for Ready Mouse and Pepper CRM. June 2026. All rights reserved.
 -->
+<p align="center">
+  <img src="assets/brand/pepper_in_the_woods.png" alt="Pepper in the woods" width="180">
+</p>
 
 # Pepper — Technical Reference
 

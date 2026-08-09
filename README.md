@@ -6,6 +6,20 @@
 
 **Pepper** helps you stay in touch with your network using the contact app you already have. It reads plain-text tags in your vCards — `TODO:` follow-ups and `Reconnect:` schedules — matches people to trips on your calendar, and sends a weekly email digest with reminders. No separate CRM database.
 
+```
+Hey friend, 
+
+I'm Pepper and I'm ready to smash your expectations like clay. As you save new lovely humans into your contact app, I will check for TODOs and people you want to reconnect with later. I will remind you these rad new humans exists, as well as list out follow-ups. When you plan to travel, I'll combine a soft-geo search of the area to show friends and frenemies in the area. Don't worry, all this data is saved on your personal Raspberry Pi with no backups to the cloud, and the traffic is routed through Shrek's swamp* to ensure anonimnity. 
+
+Love as thou wilt. Love as thou bloom. 
+
+Sincerely, 
+
+Pepper
+```
+
+* Tor browser is a onion service. Orges, like onions, have layers. Onions services therefore route traffic through Shrek's swamp to remove footprints. See what I did there. 
+
 **Day to day:** open the dashboard at **http://localhost:3000** to see who's due, who's near your next trip, and birthdays coming up.
 
 **Every few days:** `pepper` emails you a digest (or run `--dry-run` to preview first). Two schedulers are included: Monday-morning weekly (trip-timezone aware) or a simple every-3-days cron.
