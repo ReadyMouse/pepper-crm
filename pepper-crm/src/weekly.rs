@@ -13,7 +13,7 @@ use crate::mail::send_html_email;
 use crate::models::{Contact, DueReconnectInfo, IcsFile, PendingTaskInfo};
 use crate::tags::due_reconnects_from_contacts;
 use crate::tasks::pending_tasks_from_contacts;
-use crate::{build_travel_week_snapshot, load_current_snapshot, parse_contacts, TravelBuildConfig};
+use crate::{build_travel_week_snapshot, load_current_snapshot, parse_contacts_async, TravelBuildConfig};
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use std::path::PathBuf;
@@ -101,7 +101,8 @@ async fn ensure_travel_snapshot(config: &WeeklyDigestConfig) -> Result<()> {
 pub async fn run_weekly_digest(config: WeeklyDigestConfig) -> Result<WeeklyDigestResult> {
     let contacts_dir = &config.contacts_dir;
     info!("Parsing VCF files from {}...", contacts_dir.display());
-    let contacts = parse_contacts(contacts_dir)
+    let contacts = parse_contacts_async(contacts_dir.clone())
+        .await
         .with_context(|| format!("Failed to parse contacts in {}", contacts_dir.display()))?;
     info!("Parsed {} contacts", contacts.len());
 

@@ -4,7 +4,8 @@
     HTML email body rendered by the digest/mailer pipeline (Tera).
 
   INPUT: Tera context — date, dashboard_url, tasks[], reconnects[], travel_trips[], birthdays[],
-         random_picks[], counts, random_week_label, birthday_window_days.
+         random_picks[], counts, random_week_label, birthday_window_days,
+         sync_warning (optional banner when phone→CardDAV sync looks stale).
   OUTPUT: Standalone HTML email (inline CSS) for weekly digest delivery.
   NOTES: Section order: Pending Tasks → Reconnects → Travel → Birthdays → Random People.
          Used by mcp-digest-server, pepper-web /preview, and weekly send.
@@ -114,6 +115,17 @@
             color: #5a6565;
             margin-top: 8px;
         }
+        .sync-warning {
+            background-color: #fdf0ef;
+            border: 1px solid #d9534f;
+            border-left: 5px solid #d9534f;
+            border-radius: 4px;
+            color: #8c2e2a;
+            font-size: 14px;
+            font-weight: 600;
+            padding: 14px 16px;
+            margin-bottom: 20px;
+        }
         .footer {
             margin-top: 30px;
             padding-top: 20px;
@@ -128,6 +140,10 @@
     <div class="container">
         <h1>Hey Mylo, Pepper here</h1>
         <div class="date">{{ date }}</div>
+
+        {% if sync_warning %}
+        <div class="sync-warning">⚠️ {{ sync_warning }}</div>
+        {% endif %}
 
         <div class="summary">
             <strong>This week:</strong>

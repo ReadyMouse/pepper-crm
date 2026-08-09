@@ -82,6 +82,9 @@ pub struct DigestInput {
     pub birthday_window_days: u32,
     pub random_picks: Vec<DigestRandomPick>,
     pub random_week_label: String,
+    /// Set when no vCard has changed recently — phone→Radicale sync is likely broken.
+    #[serde(default)]
+    pub sync_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -224,6 +227,32 @@ pub fn random_picks_for_digest(picks: &[RandomPickInfo]) -> Vec<DigestRandomPick
         .collect()
 }
 
+/// Days without any vCard modification before the digest warns that phone
+/// sync may be broken. Override with `PEPPER_SYNC_WARN_DAYS`.
+const DEFAULT_SYNC_WARN_DAYS: i64 = 7;
+
+/// Warn when the newest `REV` across all contacts is suspiciously old.
+///
+/// Pepper cannot see the phone, but a healthy phone→Radicale pipe delivers
+/// edits steadily; total silence for a week usually means the sync chain
+/// (e.g. Orbot/DAVx⁵) is down and the digest is being built from stale data.
+pub fn sync_staleness_warning(contacts: &[Contact], as_of: NaiveDate) -> Option<String> {
+    let newest_rev = contacts.iter().filter_map(|c| c.rev).max()?;
+    let warn_days = std::env::var("PEPPER_SYNC_WARN_DAYS")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(DEFAULT_SYNC_WARN_DAYS);
+    let days_stale = (as_of - newest_rev).num_days();
+    (days_stale > warn_days).then(|| {
+        format!(
+            "No contact has changed in {days_stale} days (newest edit: {}). \
+             Phone sync may be broken — check that Orbot and DAVx⁵ are running \
+             on the phone, then force a sync in DAVx⁵.",
+            newest_rev.format("%b %-d, %Y")
+        )
+    })
+}
+
 /// Build the full digest payload from CRM data sources.
 pub fn build_digest_input(
     tasks: Vec<DigestTask>,
@@ -247,6 +276,7 @@ pub fn build_digest_input(
         birthday_window_days: BIRTHDAY_WINDOW_DAYS,
         random_picks: random_picks_for_digest(&random_week.picks),
         random_week_label: random_week.week_label,
+        sync_warning: sync_staleness_warning(contacts, as_of),
     }
 }
 
@@ -300,10 +330,15 @@ pub fn digest_subject(input: &DigestInput) -> String {
             if input.birthdays.len() == 1 { "" } else { "s" }
         ));
     }
-    if parts.is_empty() {
+    let subject = if parts.is_empty() {
         "Pepper CRM: Weekly digest".to_string()
     } else {
         format!("Pepper CRM: {}", parts.join(", "))
+    };
+    if input.sync_warning.is_some() {
+        format!("⚠️ {subject} (sync warning)")
+    } else {
+        subject
     }
 }
 
@@ -328,6 +363,7 @@ pub fn digest_tera_context(input: &DigestInput) -> TeraContext {
     context.insert("birthday_window_days", &input.birthday_window_days);
     context.insert("random_picks", &input.random_picks);
     context.insert("random_week_label", &input.random_week_label);
+    context.insert("sync_warning", &input.sync_warning);
     context.insert("task_count", &input.task_count());
     context.insert("reconnect_count", &input.reconnect_count());
     context.insert("birthday_count", &input.birthday_count());
@@ -376,12 +412,48 @@ mod tests {
             birthday_window_days: BIRTHDAY_WINDOW_DAYS,
             random_picks: vec![],
             random_week_label: "May 19 – May 25, 2026".into(),
+            sync_warning: None,
         };
         let subject = digest_subject(&input);
         assert!(subject.contains("1 task"));
         assert!(subject.contains("1 reconnect"));
         assert!(subject.contains("2 travel matches"));
         assert!(subject.contains("1 birthday"));
+        assert!(!subject.contains("⚠️"));
+
+        let mut warned = input.clone();
+        warned.sync_warning = Some("stale".into());
+        let subject = digest_subject(&warned);
+        assert!(subject.starts_with("⚠️"));
+        assert!(subject.contains("(sync warning)"));
+    }
+
+    fn contact_with_rev(rev: Option<NaiveDate>) -> Contact {
+        Contact {
+            rev,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sync_warning_fires_only_when_all_contacts_stale() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 8, 9).unwrap();
+        let old = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
+        let fresh = NaiveDate::from_ymd_opt(2026, 8, 7).unwrap();
+
+        // Every card frozen since May → warn, naming the newest edit.
+        let stale = vec![contact_with_rev(Some(old)), contact_with_rev(None)];
+        let warning = sync_staleness_warning(&stale, as_of).expect("should warn");
+        assert!(warning.contains("75 days"));
+        assert!(warning.contains("May 26, 2026"));
+
+        // One recent edit anywhere → healthy, no warning.
+        let healthy = vec![contact_with_rev(Some(old)), contact_with_rev(Some(fresh))];
+        assert!(sync_staleness_warning(&healthy, as_of).is_none());
+
+        // No REV data at all → cannot judge, stay quiet.
+        assert!(sync_staleness_warning(&[contact_with_rev(None)], as_of).is_none());
+        assert!(sync_staleness_warning(&[], as_of).is_none());
     }
 
     #[test]

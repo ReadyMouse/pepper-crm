@@ -20,7 +20,7 @@ use schemars::JsonSchema;
 use std::path::PathBuf;
 
 /// Represents a parsed contact from a VCF file
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Contact {
     pub uid: String,
     pub full_name: String,

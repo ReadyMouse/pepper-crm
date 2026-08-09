@@ -137,6 +137,7 @@ cargo build --workspace
 | `NOMINATIM_USER_AGENT` | Required for geocoding (include your email) |
 | `GEO_WRITE_TO_VCF` | Write lat/lng back to vCards after geocoding (default on) |
 | `PEPPER_DASHBOARD_URL` | Link in weekly digest email (default `http://127.0.0.1:3000`) |
+| `PEPPER_SYNC_WARN_DAYS` | Digest shows a sync-broken banner when no vCard changed in this many days (default 7) |
 | `PEPPER_WEB_BIND` | Dashboard bind address (default `127.0.0.1:3000`; no auth — only widen on a private network) |
 | `CARDDAV_*` | Optional — Radicale instead of `CONTACTS_DIR` |
 
