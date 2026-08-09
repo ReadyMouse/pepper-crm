@@ -1,0 +1,41 @@
+# # pepper-web systemd unit
+#
+#   Keeps the Pepper web dashboard running on the Pi across crashes and reboots.
+#
+# INPUT:
+#   - `pepper-web` release binary and `.env` under PEPPER_HOME (default /home/pi/pepper-crm).
+#   - Optional `PEPPER_WEB_BIND` override below (defaults to Tailscale-friendly 0.0.0.0:3000).
+#
+# OUTPUT:
+#   - Dashboard served at PEPPER_WEB_BIND; logs via journald (`journalctl -u pepper-web`).
+#
+# NOTES:
+#   - Edit User/WorkingDirectory/ExecStart if your username or checkout path differs.
+#   - WorkingDirectory must be the repo root: templates, static assets, and `.env`
+#     are resolved relative to it.
+#   - The dashboard has no auth. Bind 0.0.0.0 only if the Pi is not reachable from
+#     the public internet (e.g. home LAN + Tailscale). Otherwise keep 127.0.0.1.
+#
+#   Install:
+#     sudo cp scripts/pepper-web.service /etc/systemd/system/
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now pepper-web
+#
+# Written by Cursor for Ready Mouse and Pepper CRM. July 2026. All rights reserved.
+
+[Unit]
+Description=Pepper CRM web dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/pepper-crm
+ExecStart=/home/pi/pepper-crm/target/release/pepper-web
+Environment=PEPPER_WEB_BIND=0.0.0.0:3000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

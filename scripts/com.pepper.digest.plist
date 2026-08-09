@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  # Pepper digest LaunchAgent (every 3 days)
+
+    Runs scripts/run-digest-every-3-days.sh hourly; the script only sends when
+    the last successful send was 3+ days ago. Hourly checks + RunAtLoad mean a
+    sleeping or rebooted Mac catches up on wake instead of skipping a send.
+
+  Install:
+    cp scripts/com.pepper.digest.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.pepper.digest.plist
+
+  Uninstall:
+    launchctl bootout gui/$(id -u)/com.pepper.digest
+
+  Written by Cursor for Ready Mouse and Pepper CRM. August 2026. All rights reserved.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pepper.digest</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/mouse/src/pepper-crm/scripts/run-digest-every-3-days.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PEPPER_HOME</key>
+        <string>/Users/mouse/src/pepper-crm</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mouse/src/pepper-crm/logs/launchd-digest.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mouse/src/pepper-crm/logs/launchd-digest.log</string>
+</dict>
+</plist>

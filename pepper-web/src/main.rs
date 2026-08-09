@@ -1301,12 +1301,15 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let addr = "127.0.0.1:3000";
+    // Default to loopback only; set PEPPER_WEB_BIND (e.g. 0.0.0.0:3000) to serve
+    // on other interfaces. The dashboard has no auth — only expose it on a
+    // private network such as a Tailscale tailnet.
+    let addr = std::env::var("PEPPER_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     info!("Server running at http://{}", addr);
     info!("   Dashboard:       http://{}/", addr);
     info!("   Digest Preview:  http://{}/preview", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())

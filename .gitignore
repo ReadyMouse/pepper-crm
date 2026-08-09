@@ -53,6 +53,12 @@ Desktop.ini
 # Travel / geocode caches (weekly snapshots, not committed)
 .cache/
 
+# Radicale backup archives (contain real contact data!)
+backups/
+
+# One-off Python tooling
+.venv-xlsx/
+
 # Backup files
 *.bak
 *.backup

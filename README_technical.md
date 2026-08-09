@@ -34,7 +34,7 @@ Phone Contacts  ↔  DAVx⁵ / CardDAV client  ↔  Radicale (.vcf files)  ↔  
 | **Radicale** | CardDAV address book on the Pi (default port **5232**; often via Tailscale) |
 | **DAVx⁵** | Two-way sync between Radicale and the phone Contacts app |
 | **Pepper** | CardDAV `addressbook-query` **REPORT** reads; HTTP **PUT** writes (snooze, geocode, task done; CRM log via agent — planned) |
-| **`pepper` cron** | Hourly `pepper --send-if-due` → Monday 6:00 weekly digest |
+| **digest cron** | Hourly check on the Pi; sends when the last success is 3+ days old (`run-digest-every-3-days.sh`). Monday-6:00 weekly scheduler (`--send-if-due`) also available |
 
 Local dev uses `./contacts/` VCF files instead — same tag format, no server.
 
@@ -137,6 +137,7 @@ cargo build --workspace
 | `NOMINATIM_USER_AGENT` | Required for geocoding (include your email) |
 | `GEO_WRITE_TO_VCF` | Write lat/lng back to vCards after geocoding (default on) |
 | `PEPPER_DASHBOARD_URL` | Link in weekly digest email (default `http://127.0.0.1:3000`) |
+| `PEPPER_WEB_BIND` | Dashboard bind address (default `127.0.0.1:3000`; no auth — only widen on a private network) |
 | `CARDDAV_*` | Optional — Radicale instead of `CONTACTS_DIR` |
 
 ### `pepper` CLI flags
@@ -287,17 +288,30 @@ If CardDAV returns **503**, restart the uwsgi Radicale app: `vagrant provision -
 
 ## Raspberry Pi deployment
 
-Cross-compile from Apple Silicon Mac (Pi 5 is aarch64 Linux, not macOS):
+Day-to-day operations and the update routine live in [`README_pi.md`](README_pi.md).
+
+**How the live deployment works:** the Pi has a git clone of this repo at `~/pepper-crm` plus an untracked `.env` (secrets never leave the machine; `chmod 600`). Updates are `git push` from the laptop, then on the Pi:
 
 ```bash
-brew install messense/macos-cross-toolchains/aarch64-unknown-linux-gnu
-rustup target add aarch64-unknown-linux-gnu
-./scripts/build-linux-arm64.sh
+~/pepper-crm/scripts/update-pepper-pi.sh   # pull + rebuild + sanity check
 ```
 
-Copy `target/aarch64-unknown-linux-gnu/release/pepper` (and optionally `pepper-web`) to the Pi, or `cargo build --release` on the Pi directly.
+The script installs rustup on first run (no sudo; needs `gcc`, which Debian ships) and builds directly on the Pi — a Pi 5 (4 cores, 8 GB) handles it comfortably.
 
-### Weekly digest cron (Monday 6:00, trip timezone)
+**Alternative build path** when building on the Pi isn't an option: the [Vagrant homelab VM](#local-homelab-vagrant) on an Apple Silicon host is the same aarch64 Debian as the Pi — `cargo build --release` inside it produces Pi-ready binaries. (A macOS cross-compile script existed until Aug 2026; recover `build-linux-arm64.sh` from git history if ever needed.)
+
+### Digest cron — every 3 days (current production)
+
+Hourly cron runs `run-digest-every-3-days.sh`, which sends immediately when the last *successful* send is 3+ days old (stamp: `.cache/digest-last-sent`, updated only on success — failed sends retry the next hour). Install as the Pi user:
+
+```bash
+(crontab -l 2>/dev/null; echo "0 * * * * PEPPER_HOME=$HOME/pepper-crm $HOME/pepper-crm/scripts/run-digest-every-3-days.sh") | crontab -
+date +%s > ~/pepper-crm/.cache/digest-last-sent   # optional: start the 3-day clock now
+```
+
+Force send: `DIGEST_FORCE=1 ./scripts/run-digest-every-3-days.sh`. Logs: `logs/digest-3day.log`. The same script drives the macOS LaunchAgent (`com.pepper.digest.plist`) if you'd rather send from a laptop.
+
+### Weekly digest cron (Monday 6:00, trip timezone) — alternative
 
 Sends Monday at **6:00** in the IANA timezone for that Monday's calendar trip (`SUMMARY` = destination). Falls back to **US Eastern** if not traveling or lookup fails.
 
@@ -312,6 +326,30 @@ PEPPER_HOME=~/pepper-crm ./scripts/install-weekly-cron.sh
 Force send: `DIGEST_FORCE=1 ./scripts/run-weekly-digest.sh`
 
 Logs: `~/pepper-crm/logs/weekly-digest.log`. Override binary path with `PEPPER_BIN`.
+
+### Dashboard as a systemd service
+
+Keep `pepper-web` running across crashes and reboots (edit `User`/paths in the unit if your checkout isn't `/home/pi/pepper-crm`):
+
+```bash
+sudo cp scripts/pepper-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pepper-web
+journalctl -u pepper-web -f
+```
+
+The unit sets `PEPPER_WEB_BIND=0.0.0.0:3000` so the dashboard is reachable over the tailnet (e.g. `http://your-pi.tailnet:3000`). The dashboard has **no auth** — never expose that port to the public internet. Point `PEPPER_DASHBOARD_URL` at the tailnet URL so digest links work from anywhere.
+
+### Radicale backups
+
+Pepper writes (snooze, task done, geocode) PUT into Radicale and sync to your phone, so back up collections nightly before enabling writes:
+
+```bash
+sudo crontab -e
+# 15 3 * * * PEPPER_HOME=/home/pi/pepper-crm /home/pi/pepper-crm/scripts/backup-radicale.sh
+```
+
+Archives land in `~/pepper-crm/backups/radicale/` (30-day retention; tune with `BACKUP_KEEP_DAYS`, `RADICALE_DATA_DIR`, `BACKUP_DIR`). Restore: stop Radicale, extract the archive over the data dir, restart.
 
 ## Design principles
 
@@ -328,6 +366,7 @@ Logs: `~/pepper-crm/logs/weekly-digest.log`. Override binary path with `PEPPER_B
 | Doc | Description |
 |-----|-------------|
 | [`README.md`](README.md) | User overview and quick start |
+| [`README_pi.md`](README_pi.md) | Pi owner's manual: update routine, digest schedule, troubleshooting |
 | [`personal_crm_design.md`](personal_crm_design.md) | Full design document |
 | [`pepper-crm/README_pepper-crm.md`](pepper-crm/README_pepper-crm.md) | Core library |
 | [`pepper-web/README_pepper-web.md`](pepper-web/README_pepper-web.md) | Web dashboard |

@@ -8,7 +8,7 @@
 
 **Day to day:** open the dashboard at **http://localhost:3000** to see who's due, who's near your next trip, and birthdays coming up.
 
-**Each week:** `pepper` emails you a digest (or run `--dry-run` to preview first).
+**Every few days:** `pepper` emails you a digest (or run `--dry-run` to preview first). Two schedulers are included: Monday-morning weekly (trip-timezone aware) or a simple every-3-days cron.
 
 ## How it's meant to run
 
@@ -20,7 +20,9 @@ Phone Contacts  ↔  CardDAV sync  ↔  Radicale  ↔  Pepper
 
 Edit tags on your phone; Pepper reads the same vCards. For trying it out on your laptop, point Pepper at a folder of `.vcf` files instead — no Pi required.
 
-→ Deployment, env vars, Vagrant, and Pi cron: [`README_technical.md`](README_technical.md)
+Once live on the Pi, updating is two commands: `git push` from your laptop, then run [`scripts/update-pepper-pi.sh`](scripts/update-pepper-pi.sh) on the Pi (pulls, rebuilds, sanity-checks — installs Rust itself on first run).
+
+→ Day-to-day Pi operations: [`README_pi.md`](README_pi.md) · Deployment, env vars, Vagrant, and Pi cron: [`README_technical.md`](README_technical.md)
 
 ## Quick start
 
@@ -85,6 +87,7 @@ Timed reconnects use `REV` or a `Month YYYY:` note line (e.g. `May 2026: Had cof
 
 | Doc | For |
 |-----|-----|
+| [`README_pi.md`](README_pi.md) | Running and updating Pepper on the Pi (owner's manual) |
 | [`README_technical.md`](README_technical.md) | Architecture, env vars, CardDAV, Vagrant, Pi cron |
 | [`personal_crm_design.md`](personal_crm_design.md) | Full design doc |
 
